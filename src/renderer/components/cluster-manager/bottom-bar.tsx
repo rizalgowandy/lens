@@ -10,7 +10,7 @@ import _ from "lodash";
 
 @observer
 export class BottomBar extends React.Component {
-  renderRegistrated(registration: StatusBarRegistration) {
+  renderRegisteredItem(registration: StatusBarRegistration) {
     const { item } = registration;
 
     if (item) {
@@ -36,7 +36,7 @@ export class BottomBar extends React.Component {
 
           return (
             <div className="flex align-center gaps item" key={index}>
-              {this.renderRegistrated(registration)}
+              {this.renderRegisteredItem(registration)}
             </div>
           );
         })}

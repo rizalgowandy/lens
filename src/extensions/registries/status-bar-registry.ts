@@ -3,17 +3,17 @@
 import React from "react";
 import { BaseRegistry } from "./base-registry";
 
-export interface StatusBarComponents {
+interface StatusBarComponents {
   Item?: React.ComponentType;
 }
 
-export interface StatusBarRegistrationV2 {
+interface StatusBarRegistrationV2 {
   components: StatusBarComponents;
 }
 
 export interface StatusBarRegistration extends StatusBarRegistrationV2 {
   /**
-   * @deprecated
+   * @deprecated use components.Item instead
    */
   item?: React.ReactNode;
 }

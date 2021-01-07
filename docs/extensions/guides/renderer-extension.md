@@ -586,11 +586,11 @@ export default class HelpExtension extends LensRendererExtension {
 }
 ```
 
-The `item` field of a status bar item specifies the `React.Component` to be shown on the status bar.
+The `Item` field of a status bar item specifies the `React.ComponentType` to be shown on the status bar.
 By default items are added starting from the right side of the status bar.
-Typically, `item` would specify an icon and/or a short string of text, considering the limited space on the status bar.
+Typically, `Item` would specify an icon and/or a short string of text, considering the limited space on the status bar.
 In the example above the `HelpIcon` from the [`globalPageMenus` guide](#globalpagemenus) is reused.
-Also, the `item` provides a link to the global page by setting the `onClick` property to a function that calls the `LensRendererExtension` `navigate()` method.
+Also, the `Item` provides a link to the global page by setting the `onClick` property to a function that calls the `LensRendererExtension` `navigate()` method.
 `navigate()` takes as a parameter the id of the global page, which is shown when `navigate()` is called.
 
 ### `kubeObjectMenuItems`
