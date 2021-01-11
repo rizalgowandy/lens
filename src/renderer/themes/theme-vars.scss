@@ -35,6 +35,8 @@ $sidebarBackground: var(--sidebarBackground);
 $buttonPrimaryBackground: var(--buttonPrimaryBackground);
 $buttonDefaultBackground: var(--buttonDefaultBackground);
 $buttonAccentBackground: var(--buttonAccentBackground);
+$buttonSecondaryBackground: var(--buttonSecondaryBackground);
+$buttonActionBackground: var(--buttonActionBackground);
 $buttonDisabledBackground: var(--buttonDisabledBackground);
 
 // Tables
@@ -90,10 +92,6 @@ $terminalBrightBlue: var(--terminalBrightBlue);
 $terminalBrightMagenta: var(--terminalBrightMagenta);
 $terminalBrightCyan: var(--terminalBrightCyan);
 $terminalBrightWhite: var(--terminalBrightWhite);
-
-// Logs
-$logsBackground: var(--logsBackground);
-$logRowHoverBackground: var(--logRowHoverBackground);
 
 // Dialogs
 $dialogTextColor: var(--dialogTextColor);

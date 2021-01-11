@@ -1,9 +1,9 @@
 import path from "path";
 import packageInfo from "../../package.json";
-import { dialog, Menu, NativeImage, Tray } from "electron";
+import { Menu, NativeImage, Tray } from "electron";
 import { autorun } from "mobx";
 import { showAbout } from "./menu";
-import { AppUpdater } from "./app-updater";
+import { checkForUpdates } from "./app-updater";
 import { WindowManager } from "./window-manager";
 import { clusterStore } from "../common/cluster-store";
 import { workspaceStore } from "../common/workspace-store";
@@ -87,41 +87,33 @@ function createTrayMenu(windowManager: WindowManager): Menu {
     {
       label: "Clusters",
       submenu: workspaceStore.enabledWorkspacesList
-        .filter(workspace => clusterStore.getByWorkspaceId(workspace.id).length > 0) // hide empty workspaces
         .map(workspace => {
           const clusters = clusterStore.getByWorkspaceId(workspace.id);
+
+          if (clusters.length === 0) {
+            return;
+          }
 
           return {
             label: workspace.name,
             toolTip: workspace.description,
-            submenu: clusters.map(cluster => {
-              const { id: clusterId, name: label, online, workspace } = cluster;
-
-              return {
-                label: `${online ? "✓" : "\x20".repeat(3)/*offset*/}${label}`,
-                toolTip: clusterId,
-                async click() {
-                  workspaceStore.setActive(workspace);
-                  windowManager.navigate(clusterViewURL({ params: { clusterId } }));
-                }
-              };
-            })
+            submenu: clusters.map(({ id: clusterId, name: label, online, workspace }) => ({
+              label: `${online ? "✓" : "\x20".repeat(3)/*offset*/}${label}`,
+              toolTip: clusterId,
+              async click() {
+                workspaceStore.setActive(workspace);
+                windowManager.navigate(clusterViewURL({ params: { clusterId } }));
+              }
+            }))
           };
-        }),
+        })
+        .filter(Boolean),
     },
     {
       label: "Check for updates",
       async click() {
-        const result = await AppUpdater.checkForUpdates();
-
-        if (!result) {
-          const browserWindow = await windowManager.ensureMainWindow();
-
-          dialog.showMessageBoxSync(browserWindow, {
-            message: "No updates available",
-            type: "info",
-          });
-        }
+        await checkForUpdates();
+        await windowManager.ensureMainWindow();
       },
     },
     { type: "separator" },

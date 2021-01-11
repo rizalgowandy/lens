@@ -72,7 +72,7 @@ export class Notifications extends React.Component {
     return (
       <div className="Notifications flex column align-flex-end" ref={e => this.elem = e}>
         {notifications.map(notification => {
-          const { id, status } = notification;
+          const { id, status, onClose } = notification;
           const msgText = this.getMessage(notification);
 
           return (
@@ -88,7 +88,10 @@ export class Notifications extends React.Component {
                 <div className="box center">
                   <Icon
                     material="close" className="close"
-                    onClick={prevDefault(() => remove(id))}
+                    onClick={prevDefault(() => {
+                      remove(id);
+                      onClose?.();
+                    })}
                   />
                 </div>
               </div>

@@ -7,7 +7,7 @@ import { history } from "./navigation";
 import { ClusterManager } from "./components/cluster-manager";
 import { ErrorBoundary } from "./components/error-boundary";
 import { WhatsNew, whatsNewRoute } from "./components/+whats-new";
-import { Notifications } from "./components/notifications";
+import { Notifications, notificationsStore } from "./components/notifications";
 import { ConfirmDialog } from "./components/confirm-dialog";
 import { extensionLoader } from "../extensions/extension-loader";
 import { broadcastMessage } from "../common/ipc";
@@ -22,6 +22,8 @@ export class LensApp extends React.Component {
     window.addEventListener("online", () => {
       broadcastMessage("network:online");
     });
+
+    notificationsStore.registerIpcListener();
   }
 
   render() {

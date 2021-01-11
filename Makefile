@@ -36,21 +36,6 @@ lint:
 test: binaries/client
 	yarn test
 
-.PHONY: integration-linux
-integration-linux: build-extension-types build-extensions
-	yarn build:linux
-	yarn integration
-
-.PHONY: integration-mac
-integration-mac: build-extension-types build-extensions
-	yarn build:mac
-	yarn integration
-
-.PHONY: integration-win
-integration-win: build-extension-types build-extensions
-	yarn build:win
-	yarn integration
-
 .PHONY: test-app
 test-app:
 	yarn test
