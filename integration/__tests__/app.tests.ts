@@ -8,6 +8,7 @@ import { Application } from "spectron";
 import * as utils from "../helpers/utils";
 import { spawnSync, exec } from "child_process";
 import * as util from "util";
+import open from "open";
 
 export const promiseExec = util.promisify(exec);
 
@@ -19,7 +20,7 @@ describe("Lens integration tests", () => {
   const BACKSPACE = "\uE003";
   let app: Application;
   const appStart = async () => {
-    app = utils.setup();
+    app = new Application(utils.setup());
     await app.start();
     // Wait for splash screen to be closed
     while (await app.client.getWindowCount() > 1);
@@ -69,7 +70,7 @@ describe("Lens integration tests", () => {
   };
   const ready = minikubeReady();
 
-  describe("app start", () => {
+  describe.only("app start", () => {
     beforeAll(appStart, 20000);
 
     afterAll(async () => {
@@ -85,6 +86,17 @@ describe("Lens integration tests", () => {
     it('shows "add cluster"', async () => {
       await app.electron.ipcRenderer.send("test-menu-item-click", "File", "Add Cluster");
       await app.client.waitUntilTextExists("h2", "Add Cluster");
+    });
+
+    describe("protocol app start", () => {
+      it ("should handle opening lens:// links", async () => {
+        await open("lens://internal/foobar?");
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        const logs = await app.client.getMainProcessLogs();
+
+        expect(logs.some(log => log.includes("no handler") || log.includes("lens://internal/foobar?"))).toBe(true);
+      });
     });
 
     describe("preferences page", () => {
@@ -115,7 +127,7 @@ describe("Lens integration tests", () => {
     beforeAll(appStart, 20000);
 
     afterAll(async () => {
-      if (app && app.isRunning()) {
+      if (app?.isRunning()) {
         return utils.tearDown(app);
       }
     });
