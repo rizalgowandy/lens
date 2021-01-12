@@ -12,7 +12,7 @@ esac
 
 make build-extension-types build-extensions
 yarn build:$1
-DEBUG=true yarn integration-runner
+DEBUG=true yarn integration
 
 if [ $? -ne 0 ]; then
   case $1 in
