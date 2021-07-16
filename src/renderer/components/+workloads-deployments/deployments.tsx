@@ -1,10 +1,31 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import "./deployments.scss";
 
 import React from "react";
 import { observer } from "mobx-react";
-import { RouteComponentProps } from "react-router";
+import type { RouteComponentProps } from "react-router";
 import { Deployment, deploymentApi } from "../../api/endpoints";
-import { KubeObjectMenuProps } from "../kube-object/kube-object-menu";
+import type { KubeObjectMenuProps } from "../kube-object/kube-object-menu";
 import { MenuItem } from "../menu";
 import { Icon } from "../icon";
 import { DeploymentScaleDialog } from "./deployment-scale-dialog";
@@ -15,13 +36,12 @@ import { podsStore } from "../+workloads-pods/pods.store";
 import { nodesStore } from "../+nodes/nodes.store";
 import { eventStore } from "../+events/event.store";
 import { KubeObjectListLayout } from "../kube-object";
-import { IDeploymentsRouteParams } from "../+workloads";
 import { cssNames } from "../../utils";
 import kebabCase from "lodash/kebabCase";
 import orderBy from "lodash/orderBy";
-import { kubeObjectMenuRegistry } from "../../../extensions/registries/kube-object-menu-registry";
 import { KubeObjectStatusIcon } from "../kube-object-status-icon";
 import { Notifications } from "../notifications";
+import type { DeploymentsRouteParams } from "../../../common/routes";
 
 enum columnId {
   name = "name",
@@ -32,7 +52,7 @@ enum columnId {
   condition = "condition",
 }
 
-interface Props extends RouteComponentProps<IDeploymentsRouteParams> {
+interface Props extends RouteComponentProps<DeploymentsRouteParams> {
 }
 
 @observer
@@ -104,7 +124,7 @@ export function DeploymentMenu(props: KubeObjectMenuProps<Deployment>) {
   return (
     <>
       <MenuItem onClick={() => DeploymentScaleDialog.open(object)}>
-        <Icon material="open_with" title="Scale" interactive={toolbar}/>
+        <Icon material="open_with" tooltip="Scale" interactive={toolbar}/>
         <span className="title">Scale</span>
       </MenuItem>
       <MenuItem onClick={() => ConfirmDialog.open({
@@ -126,17 +146,9 @@ export function DeploymentMenu(props: KubeObjectMenuProps<Deployment>) {
           </p>
         ),
       })}>
-        <Icon material="autorenew" title="Restart" interactive={toolbar}/>
+        <Icon material="autorenew" tooltip="Restart" interactive={toolbar}/>
         <span className="title">Restart</span>
       </MenuItem>
     </>
   );
 }
-
-kubeObjectMenuRegistry.add({
-  kind: "Deployment",
-  apiVersions: ["apps/v1"],
-  components: {
-    MenuItem: DeploymentMenu
-  }
-});

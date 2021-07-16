@@ -1,13 +1,33 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import React from "react";
 import { ipcRenderer, IpcRendererEvent } from "electron";
 import { areArgsUpdateAvailableFromMain, UpdateAvailableChannel, onCorrect, UpdateAvailableFromMain, BackchannelArg, ClusterListNamespaceForbiddenChannel, isListNamespaceForbiddenArgs, ListNamespaceForbiddenArgs } from "../../common/ipc";
 import { Notifications, notificationsStore } from "../components/notifications";
 import { Button } from "../components/button";
 import { isMac } from "../../common/vars";
-import { invalidKubeconfigHandler } from "./invalid-kubeconfig-handler";
 import { ClusterStore } from "../../common/cluster-store";
 import { navigate } from "../navigation";
-import { entitySettingsURL } from "../components/+entity-settings";
+import { entitySettingsURL } from "../../common/routes";
 
 function sendToBackchannel(backchannel: string, notificationId: string, data: BackchannelArg): void {
   notificationsStore.remove(notificationId);
@@ -39,7 +59,8 @@ function UpdateAvailableHandler(event: IpcRendererEvent, ...[backchannel, update
     (
       <div className="flex column gaps">
         <b>Update Available</b>
-        <p>Version {updateInfo.version} of Lens IDE is now available. Would you like to update?</p>
+        <p>Version {updateInfo.version} of Lens IDE is available and ready to be installed. Would you like to update now?</p>
+        <p>Lens should restart automatically, if it doesn&apos;t please restart manually. Installed extensions might require updating.</p>
         <div className="flex gaps row align-left box grow">
           <RenderYesButtons backchannel={backchannel} notificationId={notificationId} />
           <Button active outlined label="No" onClick={() => sendToBackchannel(backchannel, notificationId, { doUpdate: false })} />
@@ -65,7 +86,7 @@ function ListNamespacesForbiddenHandler(event: IpcRendererEvent, ...[clusterId]:
 
   if (!wasDisplayed || (now - lastDisplayedAt) > intervalBetweenNotifications) {
     listNamespacesForbiddenHandlerDisplayedAt.set(clusterId, now);
-  } else  {
+  } else {
     // don't bother the user too often
     return;
   }
@@ -76,9 +97,9 @@ function ListNamespacesForbiddenHandler(event: IpcRendererEvent, ...[clusterId]:
     (
       <div className="flex column gaps">
         <b>Add Accessible Namespaces</b>
-        <p>Cluster <b>{ClusterStore.getInstance().active.name}</b> does not have permissions to list namespaces. Please add the namespaces you have access to.</p>
+        <p>Cluster <b>{ClusterStore.getInstance().getById(clusterId).name}</b> does not have permissions to list namespaces. Please add the namespaces you have access to.</p>
         <div className="flex gaps row align-left box grow">
-          <Button active outlined label="Go to Accessible Namespaces Settings" onClick={()=> {
+          <Button active outlined label="Go to Accessible Namespaces Settings" onClick={() => {
             navigate(entitySettingsURL({ params: { entityId: clusterId }, fragment: "accessible-namespaces" }));
             notificationsStore.remove(notificationId);
           }} />
@@ -98,7 +119,6 @@ export function registerIpcHandlers() {
     listener: UpdateAvailableHandler,
     verifier: areArgsUpdateAvailableFromMain,
   });
-  onCorrect(invalidKubeconfigHandler);
   onCorrect({
     source: ipcRenderer,
     channel: ClusterListNamespaceForbiddenChannel,

@@ -1,102 +1,168 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import "../common/cluster-ipc";
 import type http from "http";
-import { ipcMain } from "electron";
-import { action, autorun, observable, reaction, toJS } from "mobx";
-import { ClusterStore, getClusterIdFromHost } from "../common/cluster-store";
+import { action, autorun, makeObservable, observable, observe, reaction, toJS } from "mobx";
+import { ClusterId, ClusterStore, getClusterIdFromHost } from "../common/cluster-store";
 import { Cluster } from "./cluster";
 import logger from "./logger";
 import { apiKubePrefix } from "../common/vars";
 import { Singleton } from "../common/utils";
-import { CatalogEntity } from "../common/catalog-entity";
-import { KubernetesCluster } from "../common/catalog-entities/kubernetes-cluster";
-import { catalogEntityRegistry } from "../common/catalog-entity-registry";
-
-const clusterOwnerRef = "ClusterManager";
+import { catalogEntityRegistry } from "./catalog";
+import { KubernetesCluster, KubernetesClusterPrometheusMetrics, KubernetesClusterStatusPhase } from "../common/catalog-entities/kubernetes-cluster";
+import { ipcMainOn } from "../common/ipc";
+import { once } from "lodash";
 
 export class ClusterManager extends Singleton {
-  catalogSource = observable.array<CatalogEntity>([]);
+  private store = ClusterStore.getInstance();
+  deleting = observable.set<ClusterId>();
 
-  constructor(public readonly port: number) {
+  constructor() {
     super();
+    makeObservable(this);
+  }
 
-    catalogEntityRegistry.addSource("lens:kubernetes-clusters", this.catalogSource);
-    // auto-init clusters
-    reaction(() => ClusterStore.getInstance().enabledClustersList, (clusters) => {
-      clusters.forEach((cluster) => {
-        if (!cluster.initialized && !cluster.initializing) {
-          logger.info(`[CLUSTER-MANAGER]: init cluster`, cluster.getMeta());
-          cluster.init(port);
-        }
-      });
+  init = once(() => {
+    // reacting to every cluster's state change and total amount of items
+    reaction(
+      () => this.store.clustersList.map(c => c.getState()),
+      () => this.updateCatalog(this.store.clustersList),
+      { fireImmediately: false, }
+    );
 
-    }, { fireImmediately: true });
-
-    reaction(() => toJS(ClusterStore.getInstance().enabledClustersList, { recurseEverything: true }), () => {
-      this.updateCatalogSource(ClusterStore.getInstance().enabledClustersList);
-    }, { fireImmediately: true });
+    // reacting to every cluster's preferences change and total amount of items
+    reaction(
+      () => this.store.clustersList.map(c => toJS(c.preferences)),
+      () => this.updateCatalog(this.store.clustersList),
+      { fireImmediately: false, }
+    );
 
     reaction(() => catalogEntityRegistry.getItemsForApiKind<KubernetesCluster>("entity.k8slens.dev/v1alpha1", "KubernetesCluster"), (entities) => {
       this.syncClustersFromCatalog(entities);
     });
 
+    observe(this.deleting, change => {
+      if (change.type === "add") {
+        this.updateEntityStatus(catalogEntityRegistry.getById(change.newValue));
+      }
+    });
 
     // auto-stop removed clusters
     autorun(() => {
-      const removedClusters = Array.from(ClusterStore.getInstance().removedClusters.values());
+      const removedClusters = Array.from(this.store.removedClusters.values());
 
       if (removedClusters.length > 0) {
         const meta = removedClusters.map(cluster => cluster.getMeta());
 
         logger.info(`[CLUSTER-MANAGER]: removing clusters`, meta);
         removedClusters.forEach(cluster => cluster.disconnect());
-        ClusterStore.getInstance().removedClusters.clear();
+        this.store.removedClusters.clear();
       }
     }, {
       delay: 250
     });
 
-    ipcMain.on("network:offline", () => { this.onNetworkOffline(); });
-    ipcMain.on("network:online", () => { this.onNetworkOnline(); });
+    ipcMainOn("network:offline", this.onNetworkOffline);
+    ipcMainOn("network:online", this.onNetworkOnline);
+  });
+
+  @action
+  protected updateCatalog(clusters: Cluster[]) {
+    for (const cluster of clusters) {
+      this.updateEntityFromCluster(cluster);
+    }
   }
 
-  @action protected updateCatalogSource(clusters: Cluster[]) {
-    this.catalogSource.forEach((entity, index) => {
-      const clusterIndex = clusters.findIndex((cluster) => entity.metadata.uid === cluster.id);
+  protected updateEntityFromCluster(cluster: Cluster) {
+    const index = catalogEntityRegistry.items.findIndex((entity) => entity.metadata.uid === cluster.id);
 
-      if (clusterIndex === -1) {
-        this.catalogSource.splice(index, 1);
-      }
-    });
+    if (index === -1) {
+      return;
+    }
 
-    clusters.filter((c) => !c.ownerRef).forEach((cluster) => {
-      const entityIndex = this.catalogSource.findIndex((entity) => entity.metadata.uid === cluster.id);
-      const newEntity = this.catalogEntityFromCluster(cluster);
+    const entity = catalogEntityRegistry.items[index] as KubernetesCluster;
 
-      if (entityIndex === -1) {
-        this.catalogSource.push(newEntity);
-      } else {
-        const oldEntity = this.catalogSource[entityIndex];
+    this.updateEntityStatus(entity, cluster);
 
-        newEntity.status.phase = cluster.disconnected ? "disconnected" : "connected";
-        newEntity.status.active = !cluster.disconnected;
-        newEntity.metadata.labels = {
-          ...newEntity.metadata.labels,
-          ...oldEntity.metadata.labels
-        };
-        this.catalogSource.splice(entityIndex, 1, newEntity);
-      }
-    });
+    entity.metadata.labels = {
+      ...entity.metadata.labels,
+      ...cluster.labels,
+    };
+    entity.metadata.distro = cluster.distribution;
+    entity.metadata.kubeVersion = cluster.version;
+    entity.metadata.name = cluster.name;
+    entity.spec.metrics ||= { source: "local" };
+
+    if (entity.spec.metrics.source === "local") {
+      const prometheus: KubernetesClusterPrometheusMetrics = entity.spec?.metrics?.prometheus || {};
+
+      prometheus.type = cluster.preferences.prometheusProvider?.type;
+      prometheus.address = cluster.preferences.prometheus;
+      entity.spec.metrics.prometheus = prometheus;
+    }
+
+    if (cluster.preferences.icon) {
+      entity.spec.icon ??= {};
+      entity.spec.icon.src = cluster.preferences.icon;
+    } else {
+      entity.spec.icon = null;
+    }
+
+    catalogEntityRegistry.items.splice(index, 1, entity);
+  }
+
+  @action
+  protected updateEntityStatus(entity: KubernetesCluster, cluster?: Cluster) {
+    if (this.deleting.has(entity.getId())) {
+      entity.status.phase = "deleting";
+      entity.status.enabled = false;
+    } else {
+      entity.status.phase = ((): KubernetesClusterStatusPhase => {
+        if (!cluster) {
+          return "disconnected";
+        }
+
+        if (cluster.accessible) {
+          return "connected";
+        }
+
+        if (!cluster.disconnected) {
+          return "connecting";
+        }
+
+        return "disconnected";
+      })();
+
+      entity.status.enabled = true;
+    }
   }
 
   @action syncClustersFromCatalog(entities: KubernetesCluster[]) {
-    entities.filter((entity) => entity.metadata.source !== "local").forEach((entity: KubernetesCluster) => {
-      const cluster = ClusterStore.getInstance().getById(entity.metadata.uid);
+    for (const entity of entities) {
+      const cluster = this.store.getById(entity.metadata.uid);
 
       if (!cluster) {
-        ClusterStore.getInstance().addCluster({
+        this.store.addCluster({
           id: entity.metadata.uid,
-          enabled: true,
-          ownerRef: clusterOwnerRef,
           preferences: {
             clusterName: entity.metadata.name
           },
@@ -104,67 +170,36 @@ export class ClusterManager extends Singleton {
           contextName: entity.spec.kubeconfigContext
         });
       } else {
-        cluster.enabled = true;
-        if (!cluster.ownerRef) cluster.ownerRef = clusterOwnerRef;
-        cluster.preferences.clusterName = entity.metadata.name;
         cluster.kubeConfigPath = entity.spec.kubeconfigPath;
         cluster.contextName = entity.spec.kubeconfigContext;
 
-        entity.status = {
-          phase: cluster.disconnected ? "disconnected" : "connected",
-          active: !cluster.disconnected
-        };
+        this.updateEntityFromCluster(cluster);
       }
-    });
+    }
   }
 
-  protected catalogEntityFromCluster(cluster: Cluster) {
-    return new KubernetesCluster(toJS({
-      apiVersion: "entity.k8slens.dev/v1alpha1",
-      kind: "KubernetesCluster",
-      metadata: {
-        uid: cluster.id,
-        name: cluster.name,
-        source: "local",
-        labels: {
-          "distro": (cluster.metadata["distribution"] || "unknown").toString()
-        }
-      },
-      spec: {
-        kubeconfigPath: cluster.kubeConfigPath,
-        kubeconfigContext: cluster.contextName
-      },
-      status: {
-        phase: cluster.disconnected ? "disconnected" : "connected",
-        reason: "",
-        message: "",
-        active: !cluster.disconnected
-      }
-    }));
-  }
-
-  protected onNetworkOffline() {
+  protected onNetworkOffline = () => {
     logger.info("[CLUSTER-MANAGER]: network is offline");
-    ClusterStore.getInstance().enabledClustersList.forEach((cluster) => {
+    this.store.clustersList.forEach((cluster) => {
       if (!cluster.disconnected) {
         cluster.online = false;
         cluster.accessible = false;
         cluster.refreshConnectionStatus().catch((e) => e);
       }
     });
-  }
+  };
 
-  protected onNetworkOnline() {
+  protected onNetworkOnline = () => {
     logger.info("[CLUSTER-MANAGER]: network is online");
-    ClusterStore.getInstance().enabledClustersList.forEach((cluster) => {
+    this.store.clustersList.forEach((cluster) => {
       if (!cluster.disconnected) {
         cluster.refreshConnectionStatus().catch((e) => e);
       }
     });
-  }
+  };
 
   stop() {
-    ClusterStore.getInstance().clusters.forEach((cluster: Cluster) => {
+    this.store.clusters.forEach((cluster: Cluster) => {
       cluster.disconnect();
     });
   }
@@ -176,20 +211,46 @@ export class ClusterManager extends Singleton {
     if (req.headers.host.startsWith("127.0.0.1")) {
       const clusterId = req.url.split("/")[1];
 
-      cluster = ClusterStore.getInstance().getById(clusterId);
+      cluster = this.store.getById(clusterId);
 
       if (cluster) {
         // we need to swap path prefix so that request is proxied to kube api
         req.url = req.url.replace(`/${clusterId}`, apiKubePrefix);
       }
     } else if (req.headers["x-cluster-id"]) {
-      cluster = ClusterStore.getInstance().getById(req.headers["x-cluster-id"].toString());
+      cluster = this.store.getById(req.headers["x-cluster-id"].toString());
     } else {
       const clusterId = getClusterIdFromHost(req.headers.host);
 
-      cluster = ClusterStore.getInstance().getById(clusterId);
+      cluster = this.store.getById(clusterId);
     }
 
     return cluster;
   }
+}
+
+export function catalogEntityFromCluster(cluster: Cluster) {
+  return new KubernetesCluster({
+    metadata: {
+      uid: cluster.id,
+      name: cluster.name,
+      source: "local",
+      labels: {
+        ...cluster.labels,
+      },
+      distro: cluster.distribution,
+      kubeVersion: cluster.version,
+    },
+    spec: {
+      kubeconfigPath: cluster.kubeConfigPath,
+      kubeconfigContext: cluster.contextName,
+      icon: {}
+    },
+    status: {
+      phase: cluster.disconnected ? "disconnected" : "connected",
+      reason: "",
+      message: "",
+      active: !cluster.disconnected
+    }
+  });
 }

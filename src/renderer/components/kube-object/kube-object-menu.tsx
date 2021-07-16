@@ -1,11 +1,32 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import React from "react";
-import { autobind, cssNames } from "../../utils";
-import { KubeObject } from "../../api/kube-object";
+import { boundMethod, cssNames } from "../../utils";
+import type { KubeObject } from "../../api/kube-object";
 import { editResourceTab } from "../dock/edit-resource.store";
 import { MenuActions, MenuActionsProps } from "../menu/menu-actions";
 import { hideDetails } from "./kube-object-details";
 import { apiManager } from "../../api/api-manager";
-import { kubeObjectMenuRegistry } from "../../../extensions/registries/kube-object-menu-registry";
+import { KubeObjectMenuRegistry } from "../../../extensions/registries/kube-object-menu-registry";
 
 export interface KubeObjectMenuProps<T> extends MenuActionsProps {
   object: T | null | undefined;
@@ -17,7 +38,7 @@ export class KubeObjectMenu<T extends KubeObject> extends React.Component<KubeOb
   get store() {
     const { object } = this.props;
 
-    if (!object) return;
+    if (!object) return null;
 
     return apiManager.getStore(object.selfLink);
   }
@@ -34,13 +55,13 @@ export class KubeObjectMenu<T extends KubeObject> extends React.Component<KubeOb
     return removable !== undefined ? removable : !!(this.store && this.store.remove);
   }
 
-  @autobind()
+  @boundMethod
   async update() {
     hideDetails();
     editResourceTab(this.props.object);
   }
 
-  @autobind()
+  @boundMethod
   async remove() {
     hideDetails();
     const { object, removeAction } = this.props;
@@ -49,7 +70,7 @@ export class KubeObjectMenu<T extends KubeObject> extends React.Component<KubeOb
     else await this.store.remove(object);
   }
 
-  @autobind()
+  @boundMethod
   renderRemoveMessage() {
     const { object } = this.props;
 
@@ -62,12 +83,15 @@ export class KubeObjectMenu<T extends KubeObject> extends React.Component<KubeOb
     );
   }
 
-  getMenuItems(object: T): React.ReactChild[] {
+  getMenuItems(): React.ReactChild[] {
+    const { object, toolbar } = this.props;
+    
     if (!object) {
       return [];
     }
 
-    return kubeObjectMenuRegistry
+    return KubeObjectMenuRegistry
+      .getInstance()
       .getItemsForKind(object.kind, object.apiVersion)
       .map(({components: { MenuItem }}, index) => (
         <MenuItem
@@ -80,7 +104,7 @@ export class KubeObjectMenu<T extends KubeObject> extends React.Component<KubeOb
 
   render() {
     const { remove, update, renderRemoveMessage, isEditable, isRemovable } = this;
-    const { className, object, editable, removable, ...menuProps } = this.props;
+    const { className, editable, removable, ...menuProps } = this.props;
 
     return (
       <MenuActions
@@ -90,7 +114,7 @@ export class KubeObjectMenu<T extends KubeObject> extends React.Component<KubeOb
         removeConfirmationMessage={renderRemoveMessage}
         {...menuProps}
       >
-        {this.getMenuItems(object)}
+        {this.getMenuItems()}
       </MenuActions>
     );
   }

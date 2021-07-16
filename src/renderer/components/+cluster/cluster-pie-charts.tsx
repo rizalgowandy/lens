@@ -1,3 +1,24 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import "./cluster-pie-charts.scss";
 
 import React from "react";
@@ -12,6 +33,10 @@ import { bytesToUnits } from "../../utils";
 import { ThemeStore } from "../../theme.store";
 import { getMetricLastPoints } from "../../api/endpoints/metrics.api";
 
+function createLabels(rawLabelData: [string, number | undefined][]): string[] {
+  return rawLabelData.map(([key, value]) => `${key}: ${value?.toFixed(2) || "N/A"}`);
+}
+
 export const ClusterPieCharts = observer(() => {
   const renderLimitWarning = () => {
     return (
@@ -24,98 +49,106 @@ export const ClusterPieCharts = observer(() => {
 
   const renderCharts = () => {
     const data = getMetricLastPoints(clusterOverviewStore.metrics);
-    const { memoryUsage, memoryRequests, memoryCapacity, memoryLimits } = data;
-    const { cpuUsage, cpuRequests, cpuCapacity, cpuLimits } = data;
-    const { podUsage, podCapacity } = data;
-    const cpuLimitsOverload = cpuLimits > cpuCapacity;
-    const memoryLimitsOverload = memoryLimits > memoryCapacity;
+    const { memoryUsage, memoryRequests, memoryAllocatableCapacity, memoryCapacity, memoryLimits } = data;
+    const { cpuUsage, cpuRequests, cpuAllocatableCapacity, cpuCapacity, cpuLimits } = data;
+    const { podUsage, podAllocatableCapacity, podCapacity } = data;
+    const cpuLimitsOverload = cpuLimits > cpuAllocatableCapacity;
+    const memoryLimitsOverload = memoryLimits > memoryAllocatableCapacity;
     const defaultColor = ThemeStore.getInstance().activeTheme.colors.pieChartDefaultColor;
 
-    if (!memoryCapacity || !cpuCapacity || !podCapacity) return null;
+    if (!memoryCapacity || !cpuCapacity || !podCapacity || !memoryAllocatableCapacity || !cpuAllocatableCapacity || !podAllocatableCapacity) return null;
     const cpuData: ChartData = {
       datasets: [
         {
           data: [
             cpuUsage,
-            cpuUsage ? cpuCapacity - cpuUsage : 1,
+            cpuUsage ? cpuAllocatableCapacity - cpuUsage : 1,
           ],
           backgroundColor: [
             "#c93dce",
             defaultColor,
           ],
-          id: "cpuUsage"
+          id: "cpuUsage",
+          label: "Usage"
         },
         {
           data: [
             cpuRequests,
-            cpuRequests ? cpuCapacity - cpuRequests : 1,
+            cpuRequests ? cpuAllocatableCapacity - cpuRequests : 1,
           ],
           backgroundColor: [
             "#4caf50",
             defaultColor,
           ],
-          id: "cpuRequests"
+          id: "cpuRequests",
+          label: "Requests"
         },
         {
           data: [
             cpuLimits,
-            cpuLimitsOverload ? 0 : cpuCapacity - cpuLimits,
+            cpuLimitsOverload ? 0 : cpuAllocatableCapacity - cpuLimits,
           ],
           backgroundColor: [
             "#3d90ce",
             defaultColor,
           ],
-          id: "cpuLimits"
+          id: "cpuLimits",
+          label: "Limits"
         },
       ],
-      labels: [
-        `Usage: ${cpuUsage ? cpuUsage.toFixed(2) : "N/A"}`,
-        `Requests: ${cpuRequests ? cpuRequests.toFixed(2) : "N/A"}`,
-        `Limits: ${cpuLimits ? cpuLimits.toFixed(2) : "N/A"}`,
-        `Capacity: ${cpuCapacity || "N/A"}`
-      ]
+      labels: createLabels([
+        ["Usage", cpuUsage],
+        ["Requests", cpuRequests],
+        ["Limits", cpuLimits],
+        ["Allocatable Capacity", cpuAllocatableCapacity],
+        ["Capacity", cpuCapacity],
+      ]),
     };
     const memoryData: ChartData = {
       datasets: [
         {
           data: [
             memoryUsage,
-            memoryUsage ? memoryCapacity - memoryUsage : 1,
+            memoryUsage ? memoryAllocatableCapacity - memoryUsage : 1,
           ],
           backgroundColor: [
             "#c93dce",
             defaultColor,
           ],
-          id: "memoryUsage"
+          id: "memoryUsage",
+          label: "Usage"
         },
         {
           data: [
             memoryRequests,
-            memoryRequests ? memoryCapacity - memoryRequests : 1,
+            memoryRequests ? memoryAllocatableCapacity - memoryRequests : 1,
           ],
           backgroundColor: [
             "#4caf50",
             defaultColor,
           ],
-          id: "memoryRequests"
+          id: "memoryRequests",
+          label: "Requests"
         },
         {
           data: [
             memoryLimits,
-            memoryLimitsOverload ? 0 : memoryCapacity - memoryLimits,
+            memoryLimitsOverload ? 0 : memoryAllocatableCapacity - memoryLimits,
           ],
           backgroundColor: [
             "#3d90ce",
             defaultColor,
           ],
-          id: "memoryLimits"
+          id: "memoryLimits",
+          label: "Limits"
         },
       ],
       labels: [
         `Usage: ${bytesToUnits(memoryUsage)}`,
         `Requests: ${bytesToUnits(memoryRequests)}`,
         `Limits: ${bytesToUnits(memoryLimits)}`,
-        `Capacity: ${bytesToUnits(memoryCapacity)}`,
+        `Allocatable Capacity: ${bytesToUnits(memoryAllocatableCapacity)}`,
+        `Capacity: ${bytesToUnits(memoryCapacity)}`
       ]
     };
     const podsData: ChartData = {
@@ -123,18 +156,19 @@ export const ClusterPieCharts = observer(() => {
         {
           data: [
             podUsage,
-            podUsage ? podCapacity - podUsage : 1,
+            podUsage ? podAllocatableCapacity - podUsage : 1,
           ],
           backgroundColor: [
             "#4caf50",
             defaultColor,
           ],
-          id: "podUsage"
+          id: "podUsage",
+          label: "Usage"
         },
       ],
       labels: [
         `Usage: ${podUsage || 0}`,
-        `Capacity: ${podCapacity}`,
+        `Capacity: ${podAllocatableCapacity}`,
       ]
     };
 
@@ -144,7 +178,13 @@ export const ClusterPieCharts = observer(() => {
           <PieChart
             data={cpuData}
             title="CPU"
-            legendColors={["#c93dce", "#4caf50", "#3d90ce", defaultColor]}
+            legendColors={[
+              "#c93dce",
+              "#4caf50",
+              "#3d90ce",
+              "#032b4d",
+              defaultColor,
+            ]}
           />
           {cpuLimitsOverload && renderLimitWarning()}
         </div>
@@ -152,7 +192,13 @@ export const ClusterPieCharts = observer(() => {
           <PieChart
             data={memoryData}
             title="Memory"
-            legendColors={["#c93dce", "#4caf50", "#3d90ce", defaultColor]}
+            legendColors={[
+              "#c93dce",
+              "#4caf50",
+              "#3d90ce",
+              "#032b4d",
+              defaultColor,
+            ]}
           />
           {memoryLimitsOverload && renderLimitWarning()}
         </div>

@@ -1,17 +1,35 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import path from "path";
-import { app, ipcRenderer, remote, webFrame } from "electron";
-import { unlink } from "fs-extra";
-import { action, comparer, computed, observable, reaction, toJS } from "mobx";
+import { app, ipcMain, ipcRenderer, remote, webFrame } from "electron";
+import { action, comparer, computed, makeObservable, observable, reaction } from "mobx";
 import { BaseStore } from "./base-store";
 import { Cluster, ClusterState } from "../main/cluster";
 import migrations from "../migrations/cluster-store";
+import * as uuid from "uuid";
 import logger from "../main/logger";
 import { appEventBus } from "./event-bus";
-import { dumpConfigYaml } from "./kube-helpers";
-import { saveToAppFiles } from "./utils/saveToAppFiles";
-import { KubeConfig } from "@kubernetes/client-node";
-import { handleRequest, requestMain, subscribeToBroadcast, unsubscribeAllFromBroadcast } from "./ipc";
-import { ResourceType } from "../renderer/components/cluster-settings/components/cluster-metrics-setting";
+import { ipcMainHandle, ipcMainOn, ipcRendererOn, requestMain } from "./ipc";
+import { disposer, toJS } from "./utils";
 
 export interface ClusterIconUpload {
   clusterId: string;
@@ -30,11 +48,14 @@ export type ClusterPrometheusMetadata = {
 };
 
 export interface ClusterStoreModel {
-  activeCluster?: ClusterId; // last opened cluster
   clusters?: ClusterModel[];
 }
 
 export type ClusterId = string;
+
+export interface UpdateClusterModel extends Omit<ClusterModel, "id"> {
+  id?: ClusterId;
+}
 
 export interface ClusterModel {
   /** Unique id for a cluster */
@@ -47,11 +68,16 @@ export interface ClusterModel {
    * Workspace id
    *
    * @deprecated
-  */
+   */
   workspace?: string;
 
+  /**
+   * @deprecated this is used only for hotbar migrations from 4.2.X
+   */
+  workspaces?: string[];
+
   /** User context in kubeconfig  */
-  contextName?: string;
+  contextName: string;
 
   /** Preferences */
   preferences?: ClusterPreferences;
@@ -60,15 +86,12 @@ export interface ClusterModel {
   metadata?: ClusterMetadata;
 
   /**
-   * If extension sets ownerRef it has to explicitly mark a cluster as enabled during onActive (or when cluster is saved)
+   * Labels for the catalog entity
    */
-  ownerRef?: string;
+  labels?: Record<string, string>;
 
   /** List of accessible namespaces */
   accessibleNamespaces?: string[];
-
-  /** @deprecated */
-  kubeConfig?: string; // yaml
 }
 
 export interface ClusterPreferences extends ClusterPrometheusPreferences {
@@ -78,6 +101,8 @@ export interface ClusterPreferences extends ClusterPrometheusPreferences {
   icon?: string;
   httpsProxy?: string;
   hiddenMetrics?: string[];
+  nodeShellImage?: string;
+  imagePullSecret?: string;
 }
 
 export interface ClusterPrometheusPreferences {
@@ -92,25 +117,25 @@ export interface ClusterPrometheusPreferences {
   };
 }
 
+const initialStates = "cluster:states";
+
+export const initialNodeShellImage = "docker.io/alpine:3.13";
+
 export class ClusterStore extends BaseStore<ClusterStoreModel> {
-  static getCustomKubeConfigPath(clusterId: ClusterId): string {
-    return path.resolve((app || remote.app).getPath("userData"), "kubeconfigs", clusterId);
+  private static StateChannel = "cluster:state";
+
+  static get storedKubeConfigFolder(): string {
+    return path.resolve((app ?? remote.app).getPath("userData"), "kubeconfigs");
   }
 
-  static embedCustomKubeConfig(clusterId: ClusterId, kubeConfig: KubeConfig | string): string {
-    const filePath = ClusterStore.getCustomKubeConfigPath(clusterId);
-    const fileContents = typeof kubeConfig == "string" ? kubeConfig : dumpConfigYaml(kubeConfig);
-
-    saveToAppFiles(filePath, fileContents, { mode: 0o600 });
-
-    return filePath;
+  static getCustomKubeConfigPath(clusterId: ClusterId = uuid.v4()): string {
+    return path.resolve(ClusterStore.storedKubeConfigFolder, clusterId);
   }
 
-  @observable activeCluster: ClusterId;
-  @observable removedClusters = observable.map<ClusterId, Cluster>();
-  @observable clusters = observable.map<ClusterId, Cluster>();
+  clusters = observable.map<ClusterId, Cluster>();
+  removedClusters = observable.map<ClusterId, Cluster>();
 
-  private static stateRequestChannel = "cluster:states";
+  protected disposer = disposer();
 
   constructor() {
     super({
@@ -122,65 +147,56 @@ export class ClusterStore extends BaseStore<ClusterStoreModel> {
       migrations,
     });
 
+    makeObservable(this);
+    this.load();
     this.pushStateToViewsAutomatically();
   }
 
-  async load() {
-    await super.load();
-    type clusterStateSync = {
-      id: string;
-      state: ClusterState;
-    };
+  async loadInitialOnRenderer() {
+    logger.info("[CLUSTER-STORE] requesting initial state sync");
 
-    if (ipcRenderer) {
-      logger.info("[CLUSTER-STORE] requesting initial state sync");
-      const clusterStates: clusterStateSync[] = await requestMain(ClusterStore.stateRequestChannel);
-
-      clusterStates.forEach((clusterState) => {
-        const cluster = this.getById(clusterState.id);
-
-        if (cluster) {
-          cluster.setState(clusterState.state);
-        }
-      });
-    } else {
-      handleRequest(ClusterStore.stateRequestChannel, (): clusterStateSync[] => {
-        const states: clusterStateSync[] = [];
-
-        this.clustersList.forEach((cluster) => {
-          states.push({
-            state: cluster.getState(),
-            id: cluster.id
-          });
-        });
-
-        return states;
-      });
+    for (const { id, state } of await requestMain(initialStates)) {
+      this.getById(id)?.setState(state);
     }
+  }
+
+  provideInitialFromMain() {
+    ipcMainHandle(initialStates, () => {
+      return this.clustersList.map(cluster => ({
+        id: cluster.id,
+        state: cluster.getState(),
+      }));
+    });
   }
 
   protected pushStateToViewsAutomatically() {
-    if (!ipcRenderer) {
-      reaction(() => this.enabledClustersList, () => {
-        this.pushState();
-      });
-      reaction(() => this.connectedClustersList, () => {
-        this.pushState();
-      });
+    if (ipcMain) {
+      this.disposer.push(
+        reaction(() => this.connectedClustersList, () => this.pushState()),
+      );
     }
   }
 
+  handleStateChange = (event: any, clusterId: string, state: ClusterState) => {
+    logger.silly(`[CLUSTER-STORE]: received push-state at ${location.host} (${webFrame.routingId})`, clusterId, state);
+    this.getById(clusterId)?.setState(state);
+  };
+
   registerIpcListener() {
     logger.info(`[CLUSTER-STORE] start to listen (${webFrame.routingId})`);
-    subscribeToBroadcast("cluster:state", (event, clusterId: string, state: ClusterState) => {
-      logger.silly(`[CLUSTER-STORE]: received push-state at ${location.host} (${webFrame.routingId})`, clusterId, state);
-      this.getById(clusterId)?.setState(state);
-    });
+
+    if (ipcMain) {
+      this.disposer.push(ipcMainOn(ClusterStore.StateChannel, this.handleStateChange));
+    }
+
+    if (ipcRenderer) {
+      this.disposer.push(ipcRendererOn(ClusterStore.StateChannel, this.handleStateChange));
+    }
   }
 
   unregisterIpcListener() {
     super.unregisterIpcListener();
-    unsubscribeAllFromBroadcast("cluster:state");
+    this.disposer();
   }
 
   pushState() {
@@ -189,49 +205,12 @@ export class ClusterStore extends BaseStore<ClusterStoreModel> {
     });
   }
 
-  get activeClusterId() {
-    return this.activeCluster;
-  }
-
   @computed get clustersList(): Cluster[] {
     return Array.from(this.clusters.values());
   }
 
-  @computed get enabledClustersList(): Cluster[] {
-    return this.clustersList.filter((c) => c.enabled);
-  }
-
-  @computed get active(): Cluster | null {
-    return this.getById(this.activeCluster);
-  }
-
   @computed get connectedClustersList(): Cluster[] {
     return this.clustersList.filter((c) => !c.disconnected);
-  }
-
-  isActive(id: ClusterId) {
-    return this.activeCluster === id;
-  }
-
-  isMetricHidden(resource: ResourceType) {
-    return Boolean(this.active?.preferences.hiddenMetrics?.includes(resource));
-  }
-
-  @action
-  setActive(clusterId: ClusterId) {
-    const cluster = this.clusters.get(clusterId);
-
-    if (!cluster?.enabled) {
-      clusterId = null;
-    }
-
-    this.activeCluster = clusterId;
-  }
-
-  deactivate(id: ClusterId) {
-    if (this.isActive(id)) {
-      this.setActive(null);
-    }
   }
 
   hasClusters() {
@@ -242,77 +221,38 @@ export class ClusterStore extends BaseStore<ClusterStoreModel> {
     return this.clusters.get(id) ?? null;
   }
 
-  @action
-  addClusters(...models: ClusterModel[]): Cluster[] {
-    const clusters: Cluster[] = [];
-
-    models.forEach(model => {
-      clusters.push(this.addCluster(model));
-    });
-
-    return clusters;
-  }
-
-  @action
-  addCluster(model: ClusterModel | Cluster): Cluster {
+  addCluster(clusterOrModel: ClusterModel | Cluster): Cluster {
     appEventBus.emit({ name: "cluster", action: "add" });
-    let cluster = model as Cluster;
 
-    if (!(model instanceof Cluster)) {
-      cluster = new Cluster(model);
-    }
+    const cluster = clusterOrModel instanceof Cluster
+      ? clusterOrModel
+      : new Cluster(clusterOrModel);
 
-    if (!cluster.isManaged) {
-      cluster.enabled = true;
-    }
-    this.clusters.set(model.id, cluster);
+    this.clusters.set(cluster.id, cluster);
 
     return cluster;
   }
 
-  async removeCluster(model: ClusterModel) {
-    await this.removeById(model.id);
-  }
-
   @action
-  async removeById(clusterId: ClusterId) {
-    appEventBus.emit({ name: "cluster", action: "remove" });
-    const cluster = this.getById(clusterId);
-
-    if (cluster) {
-      this.clusters.delete(clusterId);
-
-      if (this.activeCluster === clusterId) {
-        this.setActive(null);
-      }
-
-      // remove only custom kubeconfigs (pasted as text)
-      if (cluster.kubeConfigPath == ClusterStore.getCustomKubeConfigPath(clusterId)) {
-        unlink(cluster.kubeConfigPath).catch(() => null);
-      }
-    }
-  }
-
-  @action
-  protected fromStore({ activeCluster, clusters = [] }: ClusterStoreModel = {}) {
-    const currentClusters = this.clusters.toJS();
+  protected fromStore({ clusters = [] }: ClusterStoreModel = {}) {
+    const currentClusters = new Map(this.clusters);
     const newClusters = new Map<ClusterId, Cluster>();
     const removedClusters = new Map<ClusterId, Cluster>();
 
     // update new clusters
     for (const clusterModel of clusters) {
-      let cluster = currentClusters.get(clusterModel.id);
+      try {
+        let cluster = currentClusters.get(clusterModel.id);
 
-      if (cluster) {
-        cluster.updateModel(clusterModel);
-      } else {
-        cluster = new Cluster(clusterModel);
-
-        if (!cluster.isManaged && cluster.apiUrl) {
-          cluster.enabled = true;
+        if (cluster) {
+          cluster.updateModel(clusterModel);
+        } else {
+          cluster = new Cluster(clusterModel);
         }
+        newClusters.set(clusterModel.id, cluster);
+      } catch (error) {
+        logger.warn(`[CLUSTER-STORE]: Failed to update/create a cluster: ${error}`);
       }
-      newClusters.set(clusterModel.id, cluster);
     }
 
     // update removed clusters
@@ -322,17 +262,13 @@ export class ClusterStore extends BaseStore<ClusterStoreModel> {
       }
     });
 
-    this.activeCluster = newClusters.get(activeCluster)?.enabled ? activeCluster : null;
     this.clusters.replace(newClusters);
     this.removedClusters.replace(removedClusters);
   }
 
   toJSON(): ClusterStoreModel {
     return toJS({
-      activeCluster: this.activeCluster,
       clusters: this.clustersList.map(cluster => cluster.toJSON()),
-    }, {
-      recurseEverything: true
     });
   }
 }

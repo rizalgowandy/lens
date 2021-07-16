@@ -1,12 +1,33 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 /*
   Cluster tests are run if there is a pre-existing minikube cluster. Before running cluster tests the TEST_NAMESPACE
   namespace is removed, if it exists, from the minikube cluster. Resources are created as part of the cluster tests in the
   TEST_NAMESPACE namespace. This is done to minimize destructive impact of the cluster tests on an existing minikube
   cluster and vice versa.
 */
-import { Application } from "spectron";
+import type { Application } from "spectron";
 import * as utils from "../helpers/utils";
-import { addMinikubeCluster, minikubeReady, waitForMinikubeDashboard } from "../helpers/minikube";
+import { minikubeReady, waitForMinikubeDashboard } from "../helpers/minikube";
 import { exec } from "child_process";
 import * as util from "util";
 
@@ -20,17 +41,24 @@ describe("Lens cluster pages", () => {
   const BACKSPACE = "\uE003";
   let app: Application;
   const ready = minikubeReady(TEST_NAMESPACE);
+  let clusterAdded = false;
 
   utils.describeIf(ready)("test common pages", () => {
-    let clusterAdded = false;
     const addCluster = async () => {
-      await utils.clickWhatsNew(app);
-      await utils.clickWelcomeNotification(app);
-      await app.client.waitUntilTextExists("div", "Catalog");
-      await addMinikubeCluster(app);
       await waitForMinikubeDashboard(app);
       await app.client.click('a[href="/nodes"]');
       await app.client.waitUntilTextExists("div.TableCell", "Ready");
+    };
+
+    const appStartAddCluster = async () => {
+      app = await utils.appStart();
+      await addCluster();
+      clusterAdded = true;
+    };
+
+    const tearDown = async () => {
+      await utils.tearDown(app);
+      clusterAdded = false;
     };
 
     describe("cluster add", () => {
@@ -38,24 +66,12 @@ describe("Lens cluster pages", () => {
         app = await utils.appStart();
       });
 
-      utils.afterAllWrapped(async () => {
-        if (app?.isRunning()) {
-          return utils.tearDown(app);
-        }
-      });
+      utils.afterAllWrapped(tearDown);
 
       it("allows to add a cluster", async () => {
         await addCluster();
-        clusterAdded = true;
       });
     });
-
-    const appStartAddCluster = async () => {
-      if (clusterAdded) {
-        app = await utils.appStart();
-        await addCluster();
-      }
-    };
 
     function getSidebarSelectors(itemId: string) {
       const root = `.SidebarItem[data-test-id="${itemId}"]`;
@@ -68,12 +84,7 @@ describe("Lens cluster pages", () => {
 
     describe("cluster pages", () => {
       utils.beforeAllWrapped(appStartAddCluster);
-
-      utils.afterAllWrapped(async () => {
-        if (app?.isRunning()) {
-          return utils.tearDown(app);
-        }
-      });
+      utils.afterAllWrapped(tearDown);
 
       const tests: {
         drawer?: string
@@ -358,12 +369,7 @@ describe("Lens cluster pages", () => {
 
     describe("viewing pod logs", () => {
       utils.beforeEachWrapped(appStartAddCluster);
-
-      utils.afterEachWrapped(async () => {
-        if (app?.isRunning()) {
-          return utils.tearDown(app);
-        }
-      });
+      utils.afterEachWrapped(tearDown);
 
       it(`shows a log for a pod`, async () => {
         expect(clusterAdded).toBe(true);
@@ -391,8 +397,12 @@ describe("Lens cluster pages", () => {
         // Open logs tab in dock
         await app.client.click(".list .TableRow:first-child");
         await app.client.waitForVisible(".Drawer");
-        await app.client.waitForVisible(`ul.KubeObjectMenu li.MenuItem i[title="Logs"]`);
-        await app.client.click(".drawer-title .Menu li:nth-child(2)");
+
+        const logsButton = "ul.KubeObjectMenu li.MenuItem i.Icon span[data-icon-name='subject']";
+
+        await app.client.waitForVisible(logsButton);
+        await app.client.click(logsButton);
+
         // Check if controls are available
         await app.client.waitForVisible(".LogList .VirtualList");
         await app.client.waitForVisible(".LogResourceSelector");
@@ -409,12 +419,7 @@ describe("Lens cluster pages", () => {
 
     describe("cluster operations", () => {
       utils.beforeEachWrapped(appStartAddCluster);
-
-      utils.afterEachWrapped(async () => {
-        if (app?.isRunning()) {
-          return utils.tearDown(app);
-        }
-      });
+      utils.afterEachWrapped(tearDown);
 
       it("shows default namespace", async () => {
         expect(clusterAdded).toBe(true);

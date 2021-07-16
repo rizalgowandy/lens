@@ -1,6 +1,27 @@
-import MD5 from "crypto-js/md5";
-import { action, computed, IReactionOptions, observable, reaction } from "mobx";
-import { autobind, createStorage } from "../../utils";
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+import * as uuid from "uuid";
+import { action, computed, IReactionOptions, makeObservable, observable, reaction } from "mobx";
+import { autoBind, createStorage } from "../../utils";
 import throttle from "lodash/throttle";
 
 export type TabId = string;
@@ -14,31 +35,79 @@ export enum TabKind {
   POD_LOGS = "pod-logs",
 }
 
-export interface IDockTab {
+/**
+ * This is the storage model for dock tabs.
+ *
+ * All fields are required.
+ */
+export type DockTab = Required<DockTabCreate>;
+
+/**
+ * These are the arguments for creating a new Tab on the dock
+ */
+export interface DockTabCreate {
+  /**
+   * The ID of the tab for reference purposes.
+   */
   id?: TabId;
+
+  /**
+   * What kind of dock tab it is
+   */
   kind: TabKind;
+
+  /**
+   * The tab's title, defaults to `kind`
+   */
   title?: string;
-  pinned?: boolean; // not closable
+
+  /**
+   * If true then the dock entry will take up the whole view and will not be
+   * closable.
+   */
+  pinned?: boolean;
+
+  /**
+   * Extra fields are supported.
+   */
+  [key: string]: any;
 }
+
+/**
+ * This type is for function which specifically create a single type of dock tab.
+ *
+ * That way users should get a type error if they try and specify a `kind`
+ * themselves.
+ */
+export type DockTabCreateSpecific = Omit<DockTabCreate, "kind">;
 
 export interface DockStorageState {
   height: number;
-  tabs: IDockTab[];
+  tabs: DockTab[];
   selectedTabId?: TabId;
   isOpen?: boolean;
 }
 
-@autobind()
 export class DockStore implements DockStorageState {
+  constructor() {
+    makeObservable(this);
+    autoBind(this);
+    this.init();
+  }
+
   readonly minHeight = 100;
   @observable fullSize = false;
 
   private storage = createStorage<DockStorageState>("dock", {
     height: 300,
     tabs: [
-      { id: "terminal", kind: TabKind.TERMINAL, title: "Terminal" },
+      { id: "terminal", kind: TabKind.TERMINAL, title: "Terminal", pinned: false },
     ],
   });
+
+  get whenReady() {
+    return this.storage.whenReady;
+  }
 
   get isOpen(): boolean {
     return this.storage.get().isOpen;
@@ -58,16 +127,21 @@ export class DockStore implements DockStorageState {
     });
   }
 
-  get tabs(): IDockTab[] {
+  get tabs(): DockTab[] {
     return this.storage.get().tabs;
   }
 
-  set tabs(tabs: IDockTab[]) {
+  set tabs(tabs: DockTab[]) {
     this.storage.merge({ tabs });
   }
 
   get selectedTabId(): TabId | undefined {
-    return this.storage.get().selectedTabId || this.tabs[0]?.id;
+    return this.storage.get().selectedTabId
+      || (
+        this.tabs.length > 0
+          ? this.tabs[0]?.id
+          : undefined
+      );
   }
 
   set selectedTabId(tabId: TabId) {
@@ -78,10 +152,6 @@ export class DockStore implements DockStorageState {
 
   @computed get selectedTab() {
     return this.tabs.find(tab => tab.id === this.selectedTabId);
-  }
-
-  constructor() {
-    this.init();
   }
 
   private init() {
@@ -165,15 +235,31 @@ export class DockStore implements DockStorageState {
   }
 
   @action
-  createTab(anonTab: IDockTab, addNumber = true): IDockTab {
-    const tabId = MD5(Math.random().toString() + Date.now()).toString();
-    const tab: IDockTab = { id: tabId, ...anonTab };
+  createTab(rawTabDesc: DockTabCreate, addNumber = true): DockTab {
+    const {
+      id = uuid.v4(),
+      kind,
+      pinned = false,
+      ...restOfTabFields
+    } = rawTabDesc;
+    let { title = kind } = rawTabDesc;
 
     if (addNumber) {
-      const tabNumber = this.getNewTabNumber(tab.kind);
+      const tabNumber = this.getNewTabNumber(kind);
 
-      if (tabNumber > 1) tab.title += ` (${tabNumber})`;
+      if (tabNumber > 1) {
+        title += ` (${tabNumber})`;
+      }
     }
+
+    const tab: DockTab = {
+      ...restOfTabFields,
+      id,
+      kind,
+      pinned,
+      title
+    };
+
     this.tabs.push(tab);
     this.selectTab(tab.id);
     this.open();
@@ -194,11 +280,11 @@ export class DockStore implements DockStorageState {
       if (this.tabs.length) {
         const newTab = this.tabs.slice(-1)[0]; // last
 
-        if (newTab.kind === TabKind.TERMINAL) {
+        if (newTab?.kind === TabKind.TERMINAL) {
           // close the dock when selected sibling inactive terminal tab
-          const { terminalStore } = await import("./terminal.store");
+          const { TerminalStore } = await import("./terminal.store");
 
-          if (!terminalStore.isConnected(newTab.id)) this.close();
+          if (!TerminalStore.getInstance(false)?.isConnected(newTab.id)) this.close();
         }
         this.selectTab(newTab.id);
       } else {
@@ -208,7 +294,7 @@ export class DockStore implements DockStorageState {
     }
   }
 
-  closeTabs(tabs: IDockTab[]) {
+  closeTabs(tabs: DockTab[]) {
     tabs.forEach(tab => this.closeTab(tab.id));
   }
 

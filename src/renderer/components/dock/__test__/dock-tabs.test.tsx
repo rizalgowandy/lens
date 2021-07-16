@@ -1,58 +1,76 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import React from "react";
-import { render, fireEvent } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import "@testing-library/jest-dom/extend-expect";
+import fse from "fs-extra";
 
 import { DockTabs } from "../dock-tabs";
-import { dockStore, IDockTab, TabKind } from "../dock.store";
+import { dockStore, DockTab, TabKind } from "../dock.store";
+import { noop } from "../../../utils";
+import { ThemeStore } from "../../../theme.store";
+import { TerminalStore } from "../terminal.store";
+import { UserStore } from "../../../../common/user-store";
 
-const onChangeTab = jest.fn();
+jest.mock("electron", () => ({
+  app: {
+    getPath: () => "tmp",
+  },
+}));
+
+const initialTabs: DockTab[] = [
+  { id: "terminal", kind: TabKind.TERMINAL, title: "Terminal", pinned: false, },
+  { id: "create", kind: TabKind.CREATE_RESOURCE, title: "Create resource", pinned: false, },
+  { id: "edit", kind: TabKind.EDIT_RESOURCE, title: "Edit resource", pinned: false, },
+  { id: "install", kind: TabKind.INSTALL_CHART, title: "Install chart", pinned: false, },
+  { id: "logs", kind: TabKind.POD_LOGS, title: "Logs", pinned: false, },
+];
 
 const getComponent = () => (
   <DockTabs
     tabs={dockStore.tabs}
     selectedTab={dockStore.selectedTab}
     autoFocus={true}
-    onChangeTab={onChangeTab}
+    onChangeTab={noop}
   />
 );
 
-Object.defineProperty(window, "matchMedia", {
-  writable: true,
-  value: jest.fn().mockImplementation(query => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: jest.fn(), // Deprecated
-    removeListener: jest.fn(), // Deprecated
-    addEventListener: jest.fn(),
-    removeEventListener: jest.fn(),
-    dispatchEvent: jest.fn(),
-  })),
-});
-
 const renderTabs = () => render(getComponent());
-
 const getTabKinds = () => dockStore.tabs.map(tab => tab.kind);
 
 describe("<DockTabs />", () => {
-  beforeEach(() => {
-    const terminalTab: IDockTab = { id: "terminal1", kind: TabKind.TERMINAL, title: "Terminal" };
-    const createResourceTab: IDockTab = { id: "create", kind: TabKind.CREATE_RESOURCE, title: "Create resource" };
-    const editResourceTab: IDockTab = { id: "edit", kind: TabKind.EDIT_RESOURCE, title: "Edit resource" };
-    const installChartTab: IDockTab = { id: "install", kind: TabKind.INSTALL_CHART, title: "Install chart" };
-    const logsTab: IDockTab = { id: "logs", kind: TabKind.POD_LOGS, title: "Logs" };
-
-    dockStore.tabs.push(
-      terminalTab,
-      createResourceTab,
-      editResourceTab,
-      installChartTab,
-      logsTab
-    );
+  beforeEach(async () => {
+    UserStore.createInstance();
+    ThemeStore.createInstance();
+    TerminalStore.createInstance();
+    await dockStore.whenReady;
+    dockStore.tabs = initialTabs;
   });
 
   afterEach(() => {
-    dockStore.reset();
+    ThemeStore.resetInstance();
+    TerminalStore.resetInstance();
+    UserStore.resetInstance();
+    fse.remove("tmp");
   });
 
   it("renders w/o errors", () => {
@@ -65,7 +83,7 @@ describe("<DockTabs />", () => {
     const { container } = renderTabs();
     const tabs = container.querySelectorAll(".Tab");
 
-    expect(tabs.length).toBe(6);
+    expect(tabs.length).toBe(initialTabs.length);
   });
 
   it("opens a context menu", () => {
@@ -81,15 +99,13 @@ describe("<DockTabs />", () => {
     const tab = container.querySelector(".Tab");
 
     fireEvent.contextMenu(tab);
-    const command = getByText("Close");
-
-    fireEvent.click(command);
+    fireEvent.click(getByText("Close"));
     rerender(getComponent());
+
     const tabs = container.querySelectorAll(".Tab");
 
-    expect(tabs.length).toBe(5);
+    expect(tabs.length).toBe(initialTabs.length - 1);
     expect(getTabKinds()).toEqual([
-      TabKind.TERMINAL,
       TabKind.CREATE_RESOURCE,
       TabKind.EDIT_RESOURCE,
       TabKind.INSTALL_CHART,
@@ -102,14 +118,13 @@ describe("<DockTabs />", () => {
     const tab = container.querySelectorAll(".Tab")[3];
 
     fireEvent.contextMenu(tab);
-    const command = getByText("Close other tabs");
-
-    fireEvent.click(command);
+    fireEvent.click(getByText("Close other tabs"));
     rerender(getComponent());
+
     const tabs = container.querySelectorAll(".Tab");
 
     expect(tabs.length).toBe(1);
-    expect(getTabKinds()).toEqual([TabKind.EDIT_RESOURCE]);
+    expect(getTabKinds()).toEqual([initialTabs[3].kind]);
   });
 
   it("closes all tabs", () => {
@@ -128,27 +143,20 @@ describe("<DockTabs />", () => {
 
   it("closes tabs to the right", () => {
     const { container, getByText, rerender } = renderTabs();
-    const tab = container.querySelectorAll(".Tab")[3];
+    const tab = container.querySelectorAll(".Tab")[3]; // 4th of 5
 
     fireEvent.contextMenu(tab);
-    const command = getByText("Close tabs to the right");
-
-    fireEvent.click(command);
+    fireEvent.click(getByText("Close tabs to the right"));
     rerender(getComponent());
-    const tabs = container.querySelectorAll(".Tab");
 
-    expect(tabs.length).toBe(4);
-    expect(getTabKinds()).toEqual([
-      TabKind.TERMINAL,
-      TabKind.TERMINAL,
-      TabKind.CREATE_RESOURCE,
-      TabKind.EDIT_RESOURCE
-    ]);
+    expect(getTabKinds()).toEqual(
+      initialTabs.slice(0, 4).map(tab => tab.kind)
+    );
   });
 
   it("disables 'Close All' & 'Close Other' items if only 1 tab available", () => {
     dockStore.tabs = [{
-      id: "terminal", kind: TabKind.TERMINAL, title: "Terminal"
+      id: "terminal", kind: TabKind.TERMINAL, title: "Terminal", pinned: false,
     }];
     const { container, getByText } = renderTabs();
     const tab = container.querySelector(".Tab");
@@ -163,8 +171,8 @@ describe("<DockTabs />", () => {
 
   it("disables 'Close To The Right' item if last tab clicked", () => {
     dockStore.tabs = [
-      { id: "terminal", kind: TabKind.TERMINAL, title: "Terminal" },
-      { id: "logs", kind: TabKind.POD_LOGS, title: "Pod Logs" },
+      { id: "terminal", kind: TabKind.TERMINAL, title: "Terminal", pinned: false, },
+      { id: "logs", kind: TabKind.POD_LOGS, title: "Pod Logs", pinned: false, },
     ];
     const { container, getByText } = renderTabs();
     const tab = container.querySelectorAll(".Tab")[1];

@@ -1,3 +1,23 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
 import { Application } from "spectron";
 import * as util from "util";
 import { exec } from "child_process";
@@ -17,27 +37,27 @@ interface DoneCallback {
  * This is necessary because Jest doesn't do this correctly.
  * @param fn The function to call
  */
-export function wrapJestLifecycle(fn: () => Promise<void>): (done: DoneCallback) => void {
+export function wrapJestLifecycle(fn: () => Promise<void> | void): (done: DoneCallback) => void {
   return function (done: DoneCallback) {
-    fn()
+    (async () => fn())()
       .then(() => done())
       .catch(error => done.fail(error));
   };
 }
 
-export function beforeAllWrapped(fn: () => Promise<void>): void {
+export function beforeAllWrapped(fn: () => Promise<void> | void): void {
   beforeAll(wrapJestLifecycle(fn));
 }
 
-export function beforeEachWrapped(fn: () => Promise<void>): void {
+export function beforeEachWrapped(fn: () => Promise<void> | void): void {
   beforeEach(wrapJestLifecycle(fn));
 }
 
-export function afterAllWrapped(fn: () => Promise<void>): void {
+export function afterAllWrapped(fn: () => Promise<void> | void): void {
   afterAll(wrapJestLifecycle(fn));
 }
 
-export function afterEachWrapped(fn: () => Promise<void>): void {
+export function afterEachWrapped(fn: () => Promise<void> | void): void {
   afterEach(wrapJestLifecycle(fn));
 }
 
@@ -73,29 +93,23 @@ export async function appStart() {
   while (await app.client.getWindowCount() > 1);
   await app.client.windowByIndex(0);
   await app.client.waitUntilWindowLoaded();
+  await showCatalog(app);
 
   return app;
 }
 
-export async function clickWhatsNew(app: Application) {
-  await app.client.waitUntilTextExists("h1", "What's new?");
-  await app.client.click("button.primary");
-  await app.client.waitUntilTextExists("div", "Catalog");
-}
-
-export async function clickWelcomeNotification(app: Application) {
-  const itemsText = await app.client.$("div.info-panel").getText();
-
-  if (itemsText === "0 items") {
-    // welcome notification should be present, dismiss it
-    await app.client.waitUntilTextExists("div.message", "Welcome!");
-    await app.client.click(".notification i.Icon.close");
-  }
+export async function showCatalog(app: Application) {
+  await app.client.waitForExist("#hotbarIcon-catalog-entity .Icon");
+  await app.client.click("#hotbarIcon-catalog-entity .Icon");
 }
 
 type AsyncPidGetter = () => Promise<number>;
 
-export async function tearDown(app: Application) {
+export async function tearDown(app?: Application) {
+  if (!app?.isRunning()) {
+    return;
+  }
+
   const pid = await (app.mainProcess.pid as any as AsyncPidGetter)();
 
   await app.stop();

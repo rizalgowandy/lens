@@ -22,12 +22,14 @@ jobs:
       - powershell: |
           $CI_BUILD_TAG = git describe --tags
           Write-Output ("##vso[task.setvariable variable=CI_BUILD_TAG;]$CI_BUILD_TAG")
-        displayName: 'Set the tag name as an environment variable'
         condition: "and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))"
+        displayName: Set the tag name as an environment variable
+
       - task: NodeTool@0
         inputs:
           versionSpec: $(node_version)
         displayName: Install Node.js
+
       - task: Cache@2
         inputs:
           key: 'yarn | "$(Agent.OS)"" | yarn.lock'
@@ -35,33 +37,33 @@ jobs:
             yarn | "$(Agent.OS)"
           path: $(YARN_CACHE_FOLDER)
         displayName: Cache Yarn packages
+
       - bash: |
           set -e
           git clone "https://${GH_TOKEN}@github.com/lensapp/lens-ide.git" .lens-ide-overlay
           rm -rf .lens-ide-overlay/.git
           cp -r .lens-ide-overlay/* ./
-          cp build/package.json.patch . && patch package.json package.json.patch
-        displayName: Customize config
+          jq -s '.[0] * .[1]' package.json package.ide.json > package.custom.json && mv package.custom.json package.json
         env:
           GH_TOKEN: $(LENS_IDE_GH_TOKEN)
+        displayName: Customize config
+
       - script: make node_modules
         displayName: Install dependencies
+
       - script: make build-npm
         displayName: Generate npm package
-      - script: make -j2 build-extensions
-        displayName: Build bundled extensions
-      - script: make test
-        displayName: Run tests
-      - script: make test-extensions
-        displayName: Run In-tree Extension tests
+
       - script: make build
         condition: "and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))"
-        displayName: Build
         env:
           WIN_CSC_LINK: $(WIN_CSC_LINK)
           WIN_CSC_KEY_PASSWORD: $(WIN_CSC_KEY_PASSWORD)
           AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
           AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+          BUILD_NUMBER: $(Build.BuildNumber)
+        displayName: Build
+
   - job: macOS
     pool:
       vmImage: macOS-10.14
@@ -71,12 +73,14 @@ jobs:
           node_version: 12.x
     steps:
       - script: CI_BUILD_TAG=`git describe --tags` && echo "##vso[task.setvariable variable=CI_BUILD_TAG]$CI_BUILD_TAG"
-        displayName: Set the tag name as an environment variable
         condition: "and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))"
+        displayName: Set the tag name as an environment variable
+
       - task: NodeTool@0
         inputs:
           versionSpec: $(node_version)
         displayName: Install Node.js
+
       - task: Cache@2
         inputs:
           key: 'yarn | "$(Agent.OS)" | yarn.lock'
@@ -84,28 +88,25 @@ jobs:
             yarn | "$(Agent.OS)"
           path: $(YARN_CACHE_FOLDER)
         displayName: Cache Yarn packages
+
       - bash: |
           set -e
           git clone "https://${GH_TOKEN}@github.com/lensapp/lens-ide.git" .lens-ide-overlay
           rm -rf .lens-ide-overlay/.git
           cp -r .lens-ide-overlay/* ./
-          cp build/package.json.patch . && patch package.json package.json.patch
-        displayName: Customize config
+          jq -s '.[0] * .[1]' package.json package.ide.json > package.custom.json && mv package.custom.json package.json
         env:
           GH_TOKEN: $(LENS_IDE_GH_TOKEN)
+        displayName: Customize config
+
       - script: make node_modules
         displayName: Install dependencies
+
       - script: make build-npm
         displayName: Generate npm package
-      - script: make -j2 build-extensions
-        displayName: Build bundled extensions
-      - script: make test
-        displayName: Run tests
-      - script: make test-extensions
-        displayName: Run In-tree Extension tests
+
       - script: make build
         condition: "and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))"
-        displayName: Build
         env:
           APPLEID: $(APPLEID)
           APPLEIDPASS: $(APPLEIDPASS)
@@ -113,6 +114,9 @@ jobs:
           CSC_KEY_PASSWORD: $(CSC_KEY_PASSWORD)
           AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
           AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+          BUILD_NUMBER: $(Build.BuildNumber)
+        displayName: Build
+
   - job: Linux
     pool:
       vmImage: ubuntu-16.04
@@ -122,12 +126,14 @@ jobs:
           node_version: 12.x
     steps:
       - script: CI_BUILD_TAG=`git describe --tags` && echo "##vso[task.setvariable variable=CI_BUILD_TAG]$CI_BUILD_TAG"
-        displayName: Set the tag name as an environment variable
         condition: "and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))"
+        displayName: Set the tag name as an environment variable
+
       - task: NodeTool@0
         inputs:
           versionSpec: $(node_version)
         displayName: Install Node.js
+
       - task: Cache@2
         inputs:
           key: 'yarn | "$(Agent.OS)" | yarn.lock'
@@ -135,43 +141,38 @@ jobs:
             yarn | "$(Agent.OS)"
           path: $(YARN_CACHE_FOLDER)
         displayName: Cache Yarn packages
+
       - bash: |
           set -e
           git clone "https://${GH_TOKEN}@github.com/lensapp/lens-ide.git" .lens-ide-overlay
           rm -rf .lens-ide-overlay/.git
           cp -r .lens-ide-overlay/* ./
-          cp build/package.json.patch . && patch package.json package.json.patch
-        displayName: Customize config
+          jq -s '.[0] * .[1]' package.json package.ide.json > package.custom.json && mv package.custom.json package.json
         env:
           GH_TOKEN: $(LENS_IDE_GH_TOKEN)
+        displayName: Customize config
+
       - script: make node_modules
         displayName: Install dependencies
+
       - script: make build-npm
         displayName: Generate npm package
-      - script: make -j2 build-extensions
-        displayName: Build bundled extensions
-      - script: make test
-        displayName: Run tests
-      - script: make test-extensions
-        displayName: Run In-tree Extension tests
+
       - bash: |
           sudo chown root:root /
           sudo apt-get update && sudo apt-get install -y snapd
           sudo snap install snapcraft --classic
           echo -n "${SNAP_LOGIN}" | base64 -i -d > snap_login
           snapcraft login --with snap_login
-        displayName: Setup snapcraft
         condition: "and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))"
         env:
           SNAP_LOGIN: $(SNAP_LOGIN)
+        displayName: Setup snapcraft
+
       - script: make build
-        displayName: Build
         condition: "and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))"
         env:
           AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
           AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
-      - script: make publish-npm
-        displayName: Publish npm package
-        condition: "and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/tags/'))"
-        env:
-          NPM_TOKEN: $(NPM_TOKEN)
+          BUILD_NUMBER: $(Build.BuildNumber)
+        displayName: Build

@@ -1,31 +1,57 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import { watch } from "chokidar";
 import { ipcRenderer } from "electron";
 import { EventEmitter } from "events";
-import fs from "fs-extra";
-import { observable, reaction, toJS, when } from "mobx";
+import fse from "fs-extra";
+import { observable, reaction, when, makeObservable } from "mobx";
 import os from "os";
 import path from "path";
-import { broadcastMessage, handleRequest, requestMain, subscribeToBroadcast } from "../common/ipc";
-import { Singleton } from "../common/utils";
+import { broadcastMessage, ipcMainHandle, ipcRendererOn, requestMain } from "../common/ipc";
+import { Singleton, toJS } from "../common/utils";
 import logger from "../main/logger";
-import { extensionInstaller, PackageJson } from "./extension-installer";
+import { ExtensionInstallationStateStore } from "../renderer/components/+extensions/extension-install.store";
+import { extensionInstaller } from "./extension-installer";
 import { ExtensionsStore } from "./extensions-store";
+import { ExtensionLoader } from "./extension-loader";
 import type { LensExtensionId, LensExtensionManifest } from "./lens-extension";
+import { isProduction } from "../common/vars";
+import { isCompatibleExtension } from "./extension-compatibility";
 
 export interface InstalledExtension {
-    id: LensExtensionId;
+  id: LensExtensionId;
 
-    readonly manifest: LensExtensionManifest;
+  readonly manifest: LensExtensionManifest;
 
-    // Absolute path to the non-symlinked source folder,
-    // e.g. "/Users/user/.k8slens/extensions/helloworld"
-    readonly absolutePath: string;
+  // Absolute path to the non-symlinked source folder,
+  // e.g. "/Users/user/.k8slens/extensions/helloworld"
+  readonly absolutePath: string;
 
-    // Absolute to the symlinked package.json file
-    readonly manifestPath: string;
-    readonly isBundled: boolean; // defined in project root's package.json
-    isEnabled: boolean;
-  }
+  // Absolute to the symlinked package.json file
+  readonly manifestPath: string;
+  readonly isBundled: boolean; // defined in project root's package.json
+  readonly isCompatible: boolean;
+  isEnabled: boolean;
+}
 
 const logModule = "[EXTENSION-DISCOVERY]";
 
@@ -39,7 +65,11 @@ interface ExtensionDiscoveryChannelMessage {
  * Returns true if the lstat is for a directory-like file (e.g. isDirectory or symbolic link)
  * @param lstat the stats to compare
  */
-const isDirectoryLike = (lstat: fs.Stats) => lstat.isDirectory() || lstat.isSymbolicLink();
+const isDirectoryLike = (lstat: fse.Stats) => lstat.isDirectory() || lstat.isSymbolicLink();
+
+interface LoadFromFolderOptions {
+  isBundled?: boolean;
+}
 
 /**
  * Discovers installed bundled and local extensions from the filesystem.
@@ -59,27 +89,31 @@ export class ExtensionDiscovery extends Singleton {
 
   // True if extensions have been loaded from the disk after app startup
   @observable isLoaded = false;
-  whenLoaded = when(() => this.isLoaded);
+
+  get whenLoaded() {
+    return when(() => this.isLoaded);
+  }
 
   // IPC channel to broadcast changes to extension-discovery from main
   protected static readonly extensionDiscoveryChannel = "extension-discovery:main";
 
-  public events: EventEmitter;
+  public events = new EventEmitter();
 
   constructor() {
     super();
-    this.events = new EventEmitter();
+
+    makeObservable(this);
   }
 
   get localFolderPath(): string {
     return path.join(os.homedir(), ".k8slens", "extensions");
   }
 
-  get packageJsonPath() {
+  get packageJsonPath(): string {
     return path.join(extensionInstaller.extensionPackagesRoot, manifestFilename);
   }
 
-  get inTreeTargetPath() {
+  get inTreeTargetPath(): string {
     return path.join(extensionInstaller.extensionPackagesRoot, "extensions");
   }
 
@@ -94,7 +128,7 @@ export class ExtensionDiscovery extends Singleton {
   /**
    * Initializes the class and setups the file watcher for added/removed local extensions.
    */
-  async init() {
+  async init(): Promise<void> {
     if (ipcRenderer) {
       await this.initRenderer();
     } else {
@@ -102,19 +136,19 @@ export class ExtensionDiscovery extends Singleton {
     }
   }
 
-  async initRenderer() {
+  async initRenderer(): Promise<void> {
     const onMessage = ({ isLoaded }: ExtensionDiscoveryChannelMessage) => {
       this.isLoaded = isLoaded;
     };
 
     requestMain(ExtensionDiscovery.extensionDiscoveryChannel).then(onMessage);
-    subscribeToBroadcast(ExtensionDiscovery.extensionDiscoveryChannel, (_event, message: ExtensionDiscoveryChannelMessage) => {
+    ipcRendererOn(ExtensionDiscovery.extensionDiscoveryChannel, (_event, message: ExtensionDiscoveryChannelMessage) => {
       onMessage(message);
     });
   }
 
-  async initMain() {
-    handleRequest(ExtensionDiscovery.extensionDiscoveryChannel, () => this.toJSON());
+  async initMain(): Promise<void> {
+    ipcMainHandle(ExtensionDiscovery.extensionDiscoveryChannel, () => this.toJSON());
 
     reaction(() => this.toJSON(), () => {
       this.broadcast();
@@ -125,7 +159,7 @@ export class ExtensionDiscovery extends Singleton {
    * Watches for added/removed local extensions.
    * Dependencies are installed automatically after an extension folder is copied.
    */
-  async watchExtensions() {
+  async watchExtensions(): Promise<void> {
     logger.info(`${logModule} watching extension add/remove in ${this.localFolderPath}`);
 
     // Wait until .load() has been called and has been resolved
@@ -146,11 +180,13 @@ export class ExtensionDiscovery extends Singleton {
     })
       // Extension add is detected by watching "<extensionDir>/package.json" add
       .on("add", this.handleWatchFileAdd)
-      // Extension remove is detected by watching <extensionDir>" unlink
-      .on("unlinkDir", this.handleWatchUnlinkDir);
+      // Extension remove is detected by watching "<extensionDir>" unlink
+      .on("unlinkDir", this.handleWatchUnlinkEvent)
+      // Extension remove is detected by watching "<extensionSymLink>" unlink
+      .on("unlink", this.handleWatchUnlinkEvent);
   }
 
-  handleWatchFileAdd =  async (manifestPath: string) => {
+  handleWatchFileAdd = async (manifestPath: string): Promise<void> => {
     // e.g. "foo/package.json"
     const relativePath = path.relative(this.localFolderPath, manifestPath);
 
@@ -161,6 +197,7 @@ export class ExtensionDiscovery extends Singleton {
 
     if (path.basename(manifestPath) === manifestFilename && isUnderLocalFolderPath) {
       try {
+        ExtensionInstallationStateStore.setInstallingFromMain(manifestPath);
         const absPath = path.dirname(manifestPath);
 
         // this.loadExtensionFromPath updates this.packagesJson
@@ -168,7 +205,7 @@ export class ExtensionDiscovery extends Singleton {
 
         if (extension) {
           // Remove a broken symlink left by a previous installation if it exists.
-          await this.removeSymlinkByManifestPath(manifestPath);
+          await fse.remove(extension.manifestPath);
 
           // Install dependencies for the new extension
           await this.installPackage(extension.absolutePath);
@@ -178,40 +215,50 @@ export class ExtensionDiscovery extends Singleton {
           this.events.emit("add", extension);
         }
       } catch (error) {
-        console.error(error);
+        logger.error(`${logModule}: failed to add extension: ${error}`, { error });
+      } finally {
+        ExtensionInstallationStateStore.clearInstallingFromMain(manifestPath);
       }
     }
   };
 
-  handleWatchUnlinkDir = async (filePath: string) => {
-    // filePath is the non-symlinked path to the extension folder
-    // this.packagesJson.dependencies value is the non-symlinked path to the extension folder
-    // LensExtensionId in extension-loader is the symlinked path to the extension folder manifest file
-
+  /**
+   * Handle any unlink event, filtering out non-package.json links so the delete code
+   * only happens once per extension.
+   * @param filePath The absolute path to either a folder or file in the extensions folder
+   */
+  handleWatchUnlinkEvent = async (filePath: string): Promise<void> => {
     // Check that the removed path is directly under this.localFolderPath
     // Note that the watcher can create unlink events for subdirectories of the extension
     const extensionFolderName = path.basename(filePath);
+    const expectedPath = path.relative(this.localFolderPath, filePath);
 
-    if (path.relative(this.localFolderPath, filePath) === extensionFolderName) {
-      const extension = Array.from(this.extensions.values()).find((extension) => extension.absolutePath === filePath);
-
-      if (extension) {
-        const extensionName = extension.manifest.name;
-
-        // If the extension is deleted manually while the application is running, also remove the symlink
-        await this.removeSymlinkByPackageName(extensionName);
-
-        // The path to the manifest file is the lens extension id
-        // Note that we need to use the symlinked path
-        const lensExtensionId = extension.manifestPath;
-
-        this.extensions.delete(extension.id);
-        logger.info(`${logModule} removed extension ${extensionName}`);
-        this.events.emit("remove", lensExtensionId as LensExtensionId);
-      } else {
-        logger.warn(`${logModule} extension ${extensionFolderName} not found, can't remove`);
-      }
+    if (expectedPath !== extensionFolderName) {
+      return;
     }
+
+    for (const extension of this.extensions.values()) {
+      if (extension.absolutePath !== filePath) {
+        continue;
+      }
+
+      const extensionName = extension.manifest.name;
+
+      // If the extension is deleted manually while the application is running, also remove the symlink
+      await this.removeSymlinkByPackageName(extensionName);
+
+      // The path to the manifest file is the lens extension id
+      // Note: that we need to use the symlinked path
+      const lensExtensionId = extension.manifestPath;
+
+      this.extensions.delete(extension.id);
+      logger.info(`${logModule} removed extension ${extensionName}`);
+      this.events.emit("remove", lensExtensionId);
+
+      return;
+    }
+
+    logger.warn(`${logModule} extension ${extensionFolderName} not found, can't remove`);
   };
 
   /**
@@ -220,32 +267,24 @@ export class ExtensionDiscovery extends Singleton {
    * which wouldn't be fixed if the extension was reinstalled, causing the extension not to work.
    * @param name e.g. "@mirantis/lens-extension-cc"
    */
-  removeSymlinkByPackageName(name: string) {
-    return fs.remove(this.getInstalledPath(name));
-  }
-
-  /**
-   * Remove the symlink under node_modules if it exists.
-   * @param manifestPath Path to package.json
-   */
-  removeSymlinkByManifestPath(manifestPath: string) {
-    const manifestJson = __non_webpack_require__(manifestPath);
-
-    return this.removeSymlinkByPackageName(manifestJson.name);
+  removeSymlinkByPackageName(name: string): Promise<void> {
+    return fse.remove(this.getInstalledPath(name));
   }
 
   /**
    * Uninstalls extension.
    * The application will detect the folder unlink and remove the extension from the UI automatically.
-   * @param extension Extension to uninstall.
+   * @param extensionId The ID of the extension to uninstall.
    */
-  async uninstallExtension({ absolutePath, manifest }: InstalledExtension) {
+  async uninstallExtension(extensionId: LensExtensionId): Promise<void> {
+    const { manifest, absolutePath } = this.extensions.get(extensionId) ?? ExtensionLoader.getInstance().getExtension(extensionId);
+
     logger.info(`${logModule} Uninstalling ${manifest.name}`);
 
     await this.removeSymlinkByPackageName(manifest.name);
 
     // fs.remove does nothing if the path doesn't exist anymore
-    await fs.remove(absolutePath);
+    await fse.remove(absolutePath);
   }
 
   async load(): Promise<Map<LensExtensionId, InstalledExtension>> {
@@ -259,12 +298,11 @@ export class ExtensionDiscovery extends Singleton {
     logger.info(`${logModule} loading extensions from ${extensionInstaller.extensionPackagesRoot}`);
 
     // fs.remove won't throw if path is missing
-    await fs.remove(path.join(extensionInstaller.extensionPackagesRoot, "package-lock.json"));
-
+    await fse.remove(path.join(extensionInstaller.extensionPackagesRoot, "package-lock.json"));
 
     try {
       // Verify write access to static/extensions, which is needed for symlinking
-      await fs.access(this.inTreeFolderPath, fs.constants.W_OK);
+      await fse.access(this.inTreeFolderPath, fse.constants.W_OK);
 
       // Set bundled folder path to static/extensions
       this.bundledFolderPath = this.inTreeFolderPath;
@@ -273,20 +311,20 @@ export class ExtensionDiscovery extends Singleton {
       // The error can happen if there is read-only rights to static/extensions, which would fail symlinking.
 
       // Remove e.g. /Users/<username>/Library/Application Support/LensDev/extensions
-      await fs.remove(this.inTreeTargetPath);
+      await fse.remove(this.inTreeTargetPath);
 
       // Create folder e.g. /Users/<username>/Library/Application Support/LensDev/extensions
-      await fs.ensureDir(this.inTreeTargetPath);
+      await fse.ensureDir(this.inTreeTargetPath);
 
       // Copy static/extensions to e.g. /Users/<username>/Library/Application Support/LensDev/extensions
-      await fs.copy(this.inTreeFolderPath, this.inTreeTargetPath);
+      await fse.copy(this.inTreeFolderPath, this.inTreeTargetPath);
 
       // Set bundled folder path to e.g. /Users/<username>/Library/Application Support/LensDev/extensions
       this.bundledFolderPath = this.inTreeTargetPath;
     }
 
-    await fs.ensureDir(this.nodeModulesPath);
-    await fs.ensureDir(this.localFolderPath);
+    await fse.ensureDir(this.nodeModulesPath);
+    await fse.ensureDir(this.localFolderPath);
 
     const extensions = await this.ensureExtensions();
 
@@ -299,7 +337,7 @@ export class ExtensionDiscovery extends Singleton {
    * Returns the symlinked path to the extension folder,
    * e.g. "/Users/<username>/Library/Application Support/Lens/node_modules/@publisher/extension"
    */
-  protected getInstalledPath(name: string) {
+  protected getInstalledPath(name: string): string {
     return path.join(this.nodeModulesPath, name);
   }
 
@@ -307,7 +345,7 @@ export class ExtensionDiscovery extends Singleton {
    * Returns the symlinked path to the package.json,
    * e.g. "/Users/<username>/Library/Application Support/Lens/node_modules/@publisher/extension/package.json"
    */
-  protected getInstalledManifestPath(name: string) {
+  protected getInstalledManifestPath(name: string): string {
     return path.join(this.getInstalledPath(name), manifestFilename);
   }
 
@@ -315,30 +353,32 @@ export class ExtensionDiscovery extends Singleton {
    * Returns InstalledExtension from path to package.json file.
    * Also updates this.packagesJson.
    */
-  protected async getByManifest(manifestPath: string, { isBundled = false }: {
-    isBundled?: boolean;
-  } = {}): Promise<InstalledExtension | null> {
-    let manifestJson: LensExtensionManifest;
-
+  protected async getByManifest(manifestPath: string, { isBundled = false } = {}): Promise<InstalledExtension | null> {
     try {
-      // check manifest file for existence
-      fs.accessSync(manifestPath, fs.constants.F_OK);
-
-      manifestJson = __non_webpack_require__(manifestPath);
-      const installedManifestPath = this.getInstalledManifestPath(manifestJson.name);
-
-      const isEnabled = isBundled || ExtensionsStore.getInstance().isEnabled(installedManifestPath);
+      const manifest = await fse.readJson(manifestPath) as LensExtensionManifest;
+      const id = this.getInstalledManifestPath(manifest.name);
+      const isEnabled = ExtensionsStore.getInstance().isEnabled({ id, isBundled });
+      const extensionDir = path.dirname(manifestPath);
+      const npmPackage = path.join(extensionDir, `${manifest.name}-${manifest.version}.tgz`);
+      const absolutePath = (isProduction && await fse.pathExists(npmPackage)) ? npmPackage : extensionDir;
+      const isCompatible = isBundled || isCompatibleExtension(manifest);
 
       return {
-        id: installedManifestPath,
-        absolutePath: path.dirname(manifestPath),
-        manifestPath: installedManifestPath,
-        manifest: manifestJson,
+        id,
+        absolutePath,
+        manifestPath: id,
+        manifest,
         isBundled,
-        isEnabled
+        isEnabled,
+        isCompatible
       };
     } catch (error) {
-      logger.error(`${logModule}: can't load extension manifest at ${manifestPath}: ${error}`, { manifestJson });
+      if (error.code === "ENOTDIR") {
+        // ignore this error, probably from .DS_Store file
+        logger.debug(`${logModule}: failed to load extension manifest through a not-dir-like at ${manifestPath}`);
+      } else {
+        logger.error(`${logModule}: can't load extension manifest at ${manifestPath}: ${error}`);
+      }
 
       return null;
     }
@@ -352,10 +392,11 @@ export class ExtensionDiscovery extends Singleton {
     const userExtensions = await this.loadFromFolder(this.localFolderPath, bundledExtensions.map((extension) => extension.manifest.name));
 
     for (const extension of userExtensions) {
-      if (await fs.pathExists(extension.manifestPath) === false) {
+      if ((await fse.pathExists(extension.manifestPath)) === false) {
         await this.installPackage(extension.absolutePath);
       }
     }
+
     const extensions = bundledExtensions.concat(userExtensions);
 
     return this.extensions = new Map(extensions.map(extension => [extension.id, extension]));
@@ -364,26 +405,22 @@ export class ExtensionDiscovery extends Singleton {
   /**
    * Write package.json to file system and install dependencies.
    */
-  async installBundledPackages(packageJsonPath: string, extensions: InstalledExtension[]) {
-    const packagesJson: PackageJson = {
-      dependencies: {}
-    };
+  installBundledPackages(packageJsonPath: string, extensions: InstalledExtension[]): Promise<void> {
+    const dependencies = Object.fromEntries(
+      extensions.map(extension => [extension.manifest.name, extension.absolutePath])
+    );
 
-    extensions.forEach((extension) => {
-      packagesJson.dependencies[extension.manifest.name] = extension.absolutePath;
-    });
-
-    return await extensionInstaller.installPackages(packageJsonPath, packagesJson);
+    return extensionInstaller.installPackages(packageJsonPath, { dependencies });
   }
 
-  async installPackage(name: string) {
+  async installPackage(name: string): Promise<void> {
     return extensionInstaller.installPackage(name);
   }
 
-  async loadBundledExtensions() {
+  async loadBundledExtensions(): Promise<InstalledExtension[]> {
     const extensions: InstalledExtension[] = [];
     const folderPath = this.bundledFolderPath;
-    const paths = await fs.readdir(folderPath);
+    const paths = await fse.readdir(folderPath);
 
     for (const fileName of paths) {
       const absPath = path.resolve(folderPath, fileName);
@@ -400,7 +437,7 @@ export class ExtensionDiscovery extends Singleton {
 
   async loadFromFolder(folderPath: string, bundledExtensions: string[]): Promise<InstalledExtension[]> {
     const extensions: InstalledExtension[] = [];
-    const paths = await fs.readdir(folderPath);
+    const paths = await fse.readdir(folderPath);
 
     for (const fileName of paths) {
       // do not allow to override bundled extensions
@@ -410,11 +447,11 @@ export class ExtensionDiscovery extends Singleton {
 
       const absPath = path.resolve(folderPath, fileName);
 
-      if (!fs.existsSync(absPath)) {
+      if (!fse.existsSync(absPath)) {
         continue;
       }
 
-      const lstat = await fs.lstat(absPath);
+      const lstat = await fse.lstat(absPath);
 
       // skip non-directories
       if (!isDirectoryLike(lstat)) {
@@ -435,12 +472,10 @@ export class ExtensionDiscovery extends Singleton {
 
   /**
    * Loads extension from absolute path, updates this.packagesJson to include it and returns the extension.
-   * @param absPath Folder path to extension
+   * @param folderPath Folder path to extension
    */
-  async loadExtensionFromFolder(absPath: string, { isBundled = false }: {
-    isBundled?: boolean;
-  } = {}): Promise<InstalledExtension | null> {
-    const manifestPath = path.resolve(absPath, manifestFilename);
+  async loadExtensionFromFolder(folderPath: string, { isBundled = false }: LoadFromFolderOptions = {}): Promise<InstalledExtension | null> {
+    const manifestPath = path.resolve(folderPath, manifestFilename);
 
     return this.getByManifest(manifestPath, { isBundled });
   }
@@ -448,12 +483,10 @@ export class ExtensionDiscovery extends Singleton {
   toJSON(): ExtensionDiscoveryChannelMessage {
     return toJS({
       isLoaded: this.isLoaded
-    }, {
-      recurseEverything: true
     });
   }
 
-  broadcast() {
+  broadcast(): void {
     broadcastMessage(ExtensionDiscovery.extensionDiscoveryChannel, this.toJSON());
   }
 }

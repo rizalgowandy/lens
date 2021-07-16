@@ -1,11 +1,32 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import React, { useContext } from "react";
-import { IClusterMetrics, Node } from "../../api/endpoints";
+import type { IClusterMetrics, Node } from "../../api/endpoints";
 import { BarChart, cpuOptions, memoryOptions } from "../chart";
 import { isMetricsEmpty, normalizeMetrics } from "../../api/endpoints/metrics.api";
 import { NoMetrics } from "../resource-metrics/no-metrics";
 import { IResourceMetricsValue, ResourceMetricsContext } from "../resource-metrics";
 import { observer } from "mobx-react";
-import { ChartOptions, ChartPoint } from "chart.js";
+import type { ChartOptions, ChartPoint } from "chart.js";
 import { ThemeStore } from "../../theme.store";
 import { mapValues } from "lodash";
 
@@ -26,11 +47,14 @@ export const NodeCharts = observer(() => {
 
   const {
     memoryUsage,
+    workloadMemoryUsage,
     memoryRequests,
     memoryCapacity,
+    memoryAllocatableCapacity,
     cpuUsage,
     cpuRequests,
     cpuCapacity,
+    cpuAllocatableCapacity,
     podUsage,
     podCapacity,
     fsSize,
@@ -55,6 +79,13 @@ export const NodeCharts = observer(() => {
         data: cpuRequests.map(([x, y]) => ({ x, y }))
       },
       {
+        id: `${id}-cpuAllocatableCapacity`,
+        label: `Allocatable Capacity`,
+        tooltip: `CPU allocatable capacity`,
+        borderColor: "#032b4d",
+        data: cpuAllocatableCapacity.map(([x, y]) => ({ x, y }))
+      },
+      {
         id: `${id}-cpuCapacity`,
         label: `Capacity`,
         tooltip: `CPU capacity`,
@@ -72,11 +103,25 @@ export const NodeCharts = observer(() => {
         data: memoryUsage.map(([x, y]) => ({ x, y }))
       },
       {
+        id: `${id}-workloadMemoryUsage`,
+        label: `Workload Memory Usage`,
+        tooltip: `Workload memory usage`,
+        borderColor: "#9cd3ce",
+        data: workloadMemoryUsage.map(([x, y]) => ({ x, y }))
+      },
+      {
         id: "memoryRequests",
         label: `Requests`,
         tooltip: `Memory requests`,
         borderColor: "#30b24d",
         data: memoryRequests.map(([x, y]) => ({ x, y }))
+      },
+      {
+        id: `${id}-memoryAllocatableCapacity`,
+        label: `Allocatable Capacity`,
+        tooltip: `Memory allocatable capacity`,
+        borderColor: "#032b4d",
+        data: memoryAllocatableCapacity.map(([x, y]) => ({ x, y }))
       },
       {
         id: `${id}-memoryCapacity`,
@@ -127,7 +172,7 @@ export const NodeCharts = observer(() => {
       yAxes: [{
         ticks: {
           callback: value => value
-        }
+        } 
       }]
     },
     tooltips: {

@@ -1,54 +1,69 @@
-import { observable } from "mobx";
-import { CatalogCategory, CatalogEntity, CatalogEntityData, CatalogEntityMetadata, CatalogEntityStatus } from "../catalog-entity";
-import { catalogCategoryRegistry } from "../catalog-category-registry";
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+import { CatalogCategory, CatalogEntity, CatalogEntityAddMenuContext, CatalogEntityContextMenuContext, CatalogEntityMetadata, CatalogEntityStatus } from "../catalog";
+import { catalogCategoryRegistry } from "../catalog/catalog-category-registry";
+import { productName } from "../vars";
+import { WeblinkStore } from "../weblink-store";
 
 export interface WebLinkStatus extends CatalogEntityStatus {
-  phase: "valid" | "invalid";
+  phase: "available" | "unavailable";
 }
 
 export type WebLinkSpec = {
   url: string;
 };
 
-export class WebLink implements CatalogEntity {
+export class WebLink extends CatalogEntity<CatalogEntityMetadata, WebLinkStatus, WebLinkSpec> {
   public readonly apiVersion = "entity.k8slens.dev/v1alpha1";
-  public readonly kind = "KubernetesCluster";
-  @observable public metadata: CatalogEntityMetadata;
-  @observable public status: WebLinkStatus;
-  @observable public spec: WebLinkSpec;
-
-  constructor(data: CatalogEntityData) {
-    this.metadata = data.metadata;
-    this.status = data.status as WebLinkStatus;
-    this.spec = data.spec as WebLinkSpec;
-  }
-
-  getId() {
-    return this.metadata.uid;
-  }
-
-  getName() {
-    return this.metadata.name;
-  }
+  public readonly kind = "WebLink";
 
   async onRun() {
     window.open(this.spec.url, "_blank");
   }
 
-  async onDetailsOpen() {
-    //
+  public onSettingsOpen(): void {
+    return;
   }
 
-  async onContextMenuOpen() {
-    //
+  async onContextMenuOpen(context: CatalogEntityContextMenuContext) {
+    if (this.metadata.source === "local") {
+      context.menuItems.push({
+        title: "Delete",
+        icon: "delete",
+        onClick: async () => WeblinkStore.getInstance().removeById(this.metadata.uid),
+        confirm: {
+          message: `Remove Web Link "${this.metadata.name}" from ${productName}?`
+        }
+      });
+    }
   }
 }
 
-export class WebLinkCategory implements CatalogCategory {
+export class WebLinkCategory extends CatalogCategory {
   public readonly apiVersion = "catalog.k8slens.dev/v1alpha1";
   public readonly kind = "CatalogCategory";
   public metadata = {
-    name: "Web Links"
+    name: "Web Links",
+    icon: "public"
   };
   public spec = {
     group: "entity.k8slens.dev",
@@ -62,9 +77,20 @@ export class WebLinkCategory implements CatalogCategory {
       kind: "WebLink"
     }
   };
+  public static onAdd?: () => void;
 
-  getId() {
-    return `${this.spec.group}/${this.spec.names.kind}`;
+  constructor() {
+    super();
+
+    this.on("catalogAddMenu", (ctx: CatalogEntityAddMenuContext) => {
+      ctx.menuItems.push({
+        icon: "public",
+        title: "Add web link",
+        onClick: () => {
+          WebLinkCategory.onAdd();
+        }
+      });
+    });
   }
 }
 

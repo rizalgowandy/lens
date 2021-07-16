@@ -1,11 +1,32 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import uniqueId from "lodash/uniqueId";
 import { reaction } from "mobx";
 import { podsStore } from "../+workloads-pods/pods.store";
 
 import { IPodContainer, Pod } from "../../api/endpoints";
-import { WorkloadKubeObject } from "../../api/workload-kube-object";
+import type { WorkloadKubeObject } from "../../api/workload-kube-object";
 import { DockTabStore } from "./dock-tab.store";
-import { dockStore, IDockTab, TabKind } from "./dock.store";
+import { dockStore, DockTabCreateSpecific, TabKind } from "./dock.store";
 
 export interface LogTabData {
   pods: Pod[];
@@ -69,10 +90,10 @@ export class LogTabStore extends DockTabStore<LogTabData> {
     dockStore.renameTab(tabId, `Pod ${selectedPod.metadata.name}`);
   }
 
-  private createDockTab(tabParams: Partial<IDockTab>) {
+  private createDockTab(tabParams: DockTabCreateSpecific) {
     dockStore.createTab({
+      ...tabParams,
       kind: TabKind.POD_LOGS,
-      ...tabParams
     }, false);
   }
 
@@ -87,8 +108,10 @@ export class LogTabStore extends DockTabStore<LogTabData> {
     });
   }
 
-  private updateTabsData() {
-    this.data.forEach((tabData, tabId) => {
+  private async updateTabsData() {
+    const promises: Promise<void>[] = [];
+
+    for (const [tabId, tabData] of this.data) {
       const pod = new Pod(tabData.selectedPod);
       const pods = podsStore.getPodsByOwnerId(pod.getOwnerRefs()[0]?.uid);
       const isSelectedPodInList = pods.find(item => item.getId() == pod.getId());
@@ -105,19 +128,17 @@ export class LogTabStore extends DockTabStore<LogTabData> {
 
         this.renameTab(tabId);
       } else {
-        this.closeTab(tabId);
+        promises.push(this.closeTab(tabId));
       }
-    });
+    }
+
+    await Promise.all(promises);
   }
 
-  private closeTab(tabId: string) {
+  private async closeTab(tabId: string) {
     this.clearData(tabId);
-    dockStore.closeTab(tabId);
+    await dockStore.closeTab(tabId);
   }
 }
 
 export const logTabStore = new LogTabStore();
-
-export function isLogsTab(tab: IDockTab) {
-  return tab && tab.kind === TabKind.POD_LOGS;
-}

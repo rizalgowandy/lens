@@ -6,7 +6,7 @@ In this section you will learn how this extension works under the hood.
 The Hello World sample extension does three things:
 
 - Implements `onActivate()` and outputs a message to the console.
-- Implements `onDectivate()` and outputs a message to the console.
+- Implements `onDeactivate()` and outputs a message to the console.
 - Registers `ClusterPage` so that the page is visible in the left-side menu of the cluster dashboard.
 
 Let's take a closer look at our Hello World sample's source code and see how these three things are achieved.
@@ -96,11 +96,11 @@ It also registers the `MenuItem` component that displays the `ExampleIcon` React
 These React components are defined in the additional `./src/page.tsx` file.
 
 ``` typescript
-import { LensRendererExtension } from "@k8slens/extensions";
+import { Renderer } from "@k8slens/extensions";
 import { ExampleIcon, ExamplePage } from "./page"
 import React from "react"
 
-export default class ExampleExtension extends LensRendererExtension {
+export default class ExampleExtension extends Renderer.LensExtension {
   clusterPages = [
     {
       id: "extension-example",

@@ -1,22 +1,42 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import "./cronjobs.scss";
 
 import React from "react";
 import { observer } from "mobx-react";
-import { RouteComponentProps } from "react-router";
+import type { RouteComponentProps } from "react-router";
 import { CronJob, cronJobApi } from "../../api/endpoints/cron-job.api";
 import { MenuItem } from "../menu";
 import { Icon } from "../icon";
 import { cronJobStore } from "./cronjob.store";
 import { jobStore } from "../+workloads-jobs/job.store";
 import { eventStore } from "../+events/event.store";
-import { KubeObjectMenuProps } from "../kube-object/kube-object-menu";
-import { ICronJobsRouteParams } from "../+workloads";
+import type { KubeObjectMenuProps } from "../kube-object/kube-object-menu";
 import { KubeObjectListLayout } from "../kube-object";
 import { CronJobTriggerDialog } from "./cronjob-trigger-dialog";
-import { kubeObjectMenuRegistry } from "../../../extensions/registries/kube-object-menu-registry";
 import { KubeObjectStatusIcon } from "../kube-object-status-icon";
 import { ConfirmDialog } from "../confirm-dialog/confirm-dialog";
 import { Notifications } from "../notifications/notifications";
+import type { CronJobsRouteParams } from "../../../common/routes";
 
 enum columnId {
   name = "name",
@@ -28,7 +48,7 @@ enum columnId {
   age = "age",
 }
 
-interface Props extends RouteComponentProps<ICronJobsRouteParams> {
+interface Props extends RouteComponentProps<CronJobsRouteParams> {
 }
 
 @observer
@@ -87,7 +107,7 @@ export function CronJobMenu(props: KubeObjectMenuProps<CronJob>) {
   return (
     <>
       <MenuItem onClick={() => CronJobTriggerDialog.open(object)}>
-        <Icon material="play_circle_filled" title="Trigger" interactive={toolbar}/>
+        <Icon material="play_circle_filled" tooltip="Trigger" interactive={toolbar}/>
         <span className="title">Trigger</span>
       </MenuItem>
 
@@ -106,7 +126,7 @@ export function CronJobMenu(props: KubeObjectMenuProps<CronJob>) {
               Resume CronJob <b>{object.getName()}</b>?
             </p>),
         })}>
-          <Icon material="play_circle_outline" title="Resume" interactive={toolbar}/>
+          <Icon material="play_circle_outline" tooltip="Resume" interactive={toolbar}/>
           <span className="title">Resume</span>
         </MenuItem>
 
@@ -124,18 +144,10 @@ export function CronJobMenu(props: KubeObjectMenuProps<CronJob>) {
               Suspend CronJob <b>{object.getName()}</b>?
             </p>),
         })}>
-          <Icon material="pause_circle_filled" title="Suspend" interactive={toolbar}/>
+          <Icon material="pause_circle_filled" tooltip="Suspend" interactive={toolbar}/>
           <span className="title">Suspend</span>
         </MenuItem>
       }
     </>
   );
 }
-
-kubeObjectMenuRegistry.add({
-  kind: "CronJob",
-  apiVersions: ["batch/v1beta1"],
-  components: {
-    MenuItem: CronJobMenu
-  }
-});

@@ -1,6 +1,27 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import "./tabs.scss";
 import React, { DOMAttributes } from "react";
-import { autobind, cssNames } from "../../utils";
+import { boundMethod, cssNames } from "../../utils";
 import { Icon } from "../icon";
 
 const TabsContext = React.createContext<TabsContextValue>({});
@@ -24,7 +45,7 @@ export interface TabsProps<D = any> extends TabsContextValue<D>, Omit<DOMAttribu
 export class Tabs extends React.PureComponent<TabsProps> {
   public elem: HTMLElement;
 
-  @autobind()
+  @boundMethod
   protected bindRef(elem: HTMLElement) {
     this.elem = elem;
   }
@@ -62,8 +83,8 @@ export interface TabProps<D = any> extends DOMAttributes<HTMLElement> {
 
 export class Tab extends React.PureComponent<TabProps> {
   static contextType = TabsContext;
-  public context: TabsContextValue;
-  public elem: HTMLElement;
+  declare context: TabsContextValue;
+  public ref = React.createRef<HTMLDivElement>();
 
   get isActive() {
     const { active, value } = this.props;
@@ -72,54 +93,47 @@ export class Tab extends React.PureComponent<TabProps> {
   }
 
   focus() {
-    this.elem.focus();
+    this.ref.current?.focus();
   }
 
   scrollIntoView() {
-    this.elem.scrollIntoView({
+    this.ref.current?.scrollIntoView?.({
       behavior: "smooth",
       inline: "center",
     });
   }
 
-  @autobind()
+  @boundMethod
   onClick(evt: React.MouseEvent<HTMLElement>) {
     const { value, active, disabled, onClick } = this.props;
-    const { onChange } = this.context;
 
-    if (disabled || active) return;
-    if (onClick) onClick(evt);
-    if (onChange) onChange(value);
+    if (disabled || active) {
+      return;
+    }
+
+    onClick?.(evt);
+    this.context.onChange?.(value);
   }
 
-  @autobind()
+  @boundMethod
   onFocus(evt: React.FocusEvent<HTMLElement>) {
-    const { onFocus } = this.props;
-
-    if (onFocus) onFocus(evt);
+    this.props.onFocus?.(evt);
     this.scrollIntoView();
   }
 
-  @autobind()
+  @boundMethod
   onKeyDown(evt: React.KeyboardEvent<HTMLElement>) {
-    const ENTER_KEY = evt.keyCode === 13;
-    const SPACE_KEY = evt.keyCode === 32;
+    if (evt.key === " " || evt.key === "Enter") {
+      this.ref.current?.click();
+    }
 
-    if (SPACE_KEY || ENTER_KEY) this.elem.click();
-    const { onKeyDown } = this.props;
-
-    if (onKeyDown) onKeyDown(evt);
+    this.props?.onKeyDown(evt);
   }
 
   componentDidMount() {
     if (this.isActive && this.context.autoFocus) {
       this.focus();
     }
-  }
-
-  @autobind()
-  protected bindRef(elem: HTMLElement) {
-    this.elem = elem;
   }
 
   render() {
@@ -139,7 +153,7 @@ export class Tab extends React.PureComponent<TabProps> {
         onClick={this.onClick}
         onFocus={this.onFocus}
         onKeyDown={this.onKeyDown}
-        ref={this.bindRef}
+        ref={this.ref}
       >
         {typeof icon === "string" ? <Icon small material={icon}/> : icon}
         <div className="label">

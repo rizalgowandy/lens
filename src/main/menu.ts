@@ -1,17 +1,34 @@
-import { app, BrowserWindow, dialog, ipcMain, IpcMainEvent, Menu, MenuItem, MenuItemConstructorOptions, webContents, shell } from "electron";
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
+import { app, BrowserWindow, dialog, IpcMainEvent, Menu, MenuItem, MenuItemConstructorOptions, webContents, shell } from "electron";
 import { autorun } from "mobx";
-import { WindowManager } from "./window-manager";
+import type { WindowManager } from "./window-manager";
 import { appName, isMac, isWindows, isTestEnv, docsUrl, supportUrl, productName } from "../common/vars";
-import { addClusterURL } from "../renderer/components/+add-cluster/add-cluster.route";
-import { preferencesURL } from "../renderer/components/+preferences/preferences.route";
-import { whatsNewURL } from "../renderer/components/+whats-new/whats-new.route";
-import { extensionsURL } from "../renderer/components/+extensions/extensions.route";
-import { catalogURL } from "../renderer/components/+catalog/catalog.route";
-import { menuRegistry } from "../extensions/registries/menu-registry";
+import { MenuRegistry } from "../extensions/registries/menu-registry";
 import logger from "./logger";
 import { exitApp } from "./exit-app";
-import { broadcastMessage } from "../common/ipc";
+import { broadcastMessage, ipcMainOn } from "../common/ipc";
 import * as packageJson from "../../package.json";
+import { preferencesURL, extensionsURL, addClusterURL, catalogURL, welcomeURL } from "../common/routes";
 
 export type MenuTopId = "mac" | "file" | "edit" | "view" | "help";
 
@@ -201,9 +218,9 @@ export function buildMenu(windowManager: WindowManager) {
     role: "help",
     submenu: [
       {
-        label: "What's new?",
+        label: "Welcome",
         click() {
-          navigate(whatsNewURL());
+          navigate(welcomeURL());
         },
       },
       {
@@ -238,7 +255,7 @@ export function buildMenu(windowManager: WindowManager) {
   };
 
   // Modify menu from extensions-api
-  menuRegistry.getItems().forEach(({ parentId, ...menuItem }) => {
+  MenuRegistry.getInstance().getItems().forEach(({ parentId, ...menuItem }) => {
     try {
       const topMenu = appMenu[parentId as MenuTopId].submenu as MenuItemConstructorOptions[];
 
@@ -259,7 +276,7 @@ export function buildMenu(windowManager: WindowManager) {
   if (isTestEnv) {
     // this is a workaround for the test environment (spectron) not being able to directly access
     // the application menus (https://github.com/electron-userland/spectron/issues/21)
-    ipcMain.on("test-menu-item-click", (event: IpcMainEvent, ...names: string[]) => {
+    ipcMainOn("test-menu-item-click", (event: IpcMainEvent, ...names: string[]) => {
       let menu: Menu = Menu.getApplicationMenu();
       const parentLabels: string[] = [];
       let menuItem: MenuItem;

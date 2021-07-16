@@ -1,20 +1,40 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import { ipcMain } from "electron";
-import type { ClusterId, ClusterMetadata, ClusterModel, ClusterPreferences, ClusterPrometheusPreferences } from "../common/cluster-store";
-import type { IMetricsReqParams } from "../renderer/api/endpoints/metrics.api";
-import { action, comparer, computed, observable, reaction, toJS, when } from "mobx";
-import { apiKubePrefix } from "../common/vars";
-import { broadcastMessage, InvalidKubeconfigChannel, ClusterListNamespaceForbiddenChannel } from "../common/ipc";
+import type { ClusterId, ClusterMetadata, ClusterModel, ClusterPreferences, ClusterPrometheusPreferences, UpdateClusterModel } from "../common/cluster-store";
+import { action, comparer, computed, makeObservable, observable, reaction, when } from "mobx";
+import { broadcastMessage, ClusterListNamespaceForbiddenChannel } from "../common/ipc";
 import { ContextHandler } from "./context-handler";
 import { AuthorizationV1Api, CoreV1Api, HttpError, KubeConfig, V1ResourceAttributes } from "@kubernetes/client-node";
 import { Kubectl } from "./kubectl";
 import { KubeconfigManager } from "./kubeconfig-manager";
-import { loadConfig, validateKubeConfig } from "../common/kube-helpers";
-import request, { RequestPromiseOptions } from "request-promise-native";
-import { apiResources, KubeApiResource } from "../common/rbac";
+import { loadConfigFromFile, loadConfigFromFileSync, validateKubeConfig } from "../common/kube-helpers";
+import { apiResourceRecord, apiResources, KubeApiResource, KubeResource } from "../common/rbac";
 import logger from "./logger";
 import { VersionDetector } from "./cluster-detectors/version-detector";
 import { detectorRegistry } from "./cluster-detectors/detector-registry";
 import plimit from "p-limit";
+import { toJS } from "../common/utils";
+import { initialNodeShellImage } from "../common/cluster-store";
 
 export enum ClusterStatus {
   AccessGranted = 2,
@@ -31,13 +51,24 @@ export enum ClusterMetadataKey {
   PROMETHEUS = "prometheus"
 }
 
+export enum ClusterMetricsResourceType {
+  Cluster = "Cluster",
+  Node = "Node",
+  Pod = "Pod",
+  Deployment = "Deployment",
+  StatefulSet = "StatefulSet",
+  Container = "Container",
+  Ingress = "Ingress",
+  VolumeClaim = "VolumeClaim",
+  ReplicaSet = "ReplicaSet",
+  DaemonSet = "DaemonSet",
+}
+
 export type ClusterRefreshOptions = {
   refreshMetadata?: boolean
 };
 
 export interface ClusterState {
-  initialized: boolean;
-  enabled: boolean;
   apiUrl: string;
   online: boolean;
   disconnected: boolean;
@@ -57,46 +88,23 @@ export interface ClusterState {
  */
 export class Cluster implements ClusterModel, ClusterState {
   /** Unique id for a cluster */
-  public id: ClusterId;
-  /**
-   * Kubectl
-   *
-   * @internal
-   */
-  public kubeCtl: Kubectl;
+  public readonly id: ClusterId;
+  private kubeCtl: Kubectl;
   /**
    * Context handler
    *
    * @internal
    */
   public contextHandler: ContextHandler;
-  /**
-   * Owner reference
-   *
-   * If extension sets this it needs to also mark cluster as enabled on activate (or when added to a store)
-   */
-  public ownerRef: string;
   protected kubeconfigManager: KubeconfigManager;
   protected eventDisposers: Function[] = [];
   protected activated = false;
   private resourceAccessStatuses: Map<KubeApiResource, boolean> = new Map();
 
-  whenInitialized = when(() => this.initialized);
-  whenReady = when(() => this.ready);
+  get whenReady() {
+    return when(() => this.ready);
+  }
 
-  /**
-   * Is cluster object initializinng on-going
-   *
-   * @observable
-   */
-  @observable initializing = false;
-
-  /**
-   * Is cluster object initialized
-   *
-   * @observable
-   */
-  @observable initialized = false;
   /**
    * Kubeconfig context name
    *
@@ -114,24 +122,15 @@ export class Cluster implements ClusterModel, ClusterState {
    */
   @observable workspace: string;
   /**
+   * @deprecated
+   */
+  @observable workspaces: string[];
+  /**
    * Kubernetes API server URL
    *
    * @observable
    */
   @observable apiUrl: string; // cluster server url
-  /**
-   * Internal authentication proxy URL
-   *
-   * @observable
-   * @internal
-   */
-  @observable kubeProxyUrl: string; // lens-proxy to kube-api url
-  /**
-   * Is cluster instance enabled (disabled clusters are currently hidden)
-   *
-   * @observable
-   */
-  @observable enabled = false; // only enabled clusters are visible to users
   /**
    * Is cluster online
    *
@@ -214,6 +213,11 @@ export class Cluster implements ClusterModel, ClusterState {
   @observable accessibleNamespaces: string[] = [];
 
   /**
+   * Labels for the catalog entity
+   */
+  @observable labels: Record<string, string> = {};
+
+  /**
    * Is cluster available
    *
    * @computed
@@ -232,6 +236,20 @@ export class Cluster implements ClusterModel, ClusterState {
   }
 
   /**
+   * The detected kubernetes distribution
+   */
+  @computed get distribution(): string {
+    return this.metadata[ClusterMetadataKey.DISTRIBUTION]?.toString() || "unknown";
+  }
+
+  /**
+   * The detected kubernetes version
+   */
+  @computed get version(): string {
+    return this.metadata[ClusterMetadataKey.VERSION]?.toString() || "unknown";
+  }
+
+  /**
    * Prometheus preferences
    *
    * @computed
@@ -240,38 +258,34 @@ export class Cluster implements ClusterModel, ClusterState {
   @computed get prometheusPreferences(): ClusterPrometheusPreferences {
     const { prometheus, prometheusProvider } = this.preferences;
 
-    return toJS({ prometheus, prometheusProvider }, {
-      recurseEverything: true,
-    });
-  }
-
-  /**
-   * Kubernetes version
-   */
-  get version(): string {
-    return String(this.metadata?.version ?? "");
+    return toJS({ prometheus, prometheusProvider });
   }
 
   constructor(model: ClusterModel) {
+    makeObservable(this);
+    this.id = model.id;
     this.updateModel(model);
 
-    try {
-      const kubeconfig = this.getKubeconfig();
+    const { config } = loadConfigFromFileSync(this.kubeConfigPath);
+    const validationError = validateKubeConfig(config, this.contextName);
 
-      validateKubeConfig(kubeconfig, this.contextName, { validateCluster: true, validateUser: false, validateExec: false});
-      this.apiUrl = kubeconfig.getCluster(kubeconfig.getContextObject(this.contextName).cluster).server;
-    } catch(err) {
-      logger.error(err);
-      logger.error(`[CLUSTER] Failed to load kubeconfig for the cluster '${this.name || this.contextName}' (context: ${this.contextName}, kubeconfig: ${this.kubeConfigPath}).`);
-      broadcastMessage(InvalidKubeconfigChannel, model.id);
+    if (validationError) {
+      throw validationError;
     }
-  }
 
-  /**
-   * Is cluster managed by an extension
-   */
-  get isManaged(): boolean {
-    return !!this.ownerRef;
+    this.apiUrl = config.getCluster(config.getContextObject(this.contextName).cluster).server;
+
+    if (ipcMain) {
+      // for the time being, until renderer gets its own cluster type
+      this.contextHandler = new ContextHandler(this);
+      this.kubeconfigManager = new KubeconfigManager(this, this.contextHandler);
+
+      logger.debug(`[CLUSTER]: Cluster init success`, {
+        id: this.id,
+        context: this.contextName,
+        apiUrl: this.apiUrl
+      });
+    }
   }
 
   /**
@@ -279,36 +293,37 @@ export class Cluster implements ClusterModel, ClusterState {
    *
    * @param model
    */
-  @action updateModel(model: ClusterModel) {
-    Object.assign(this, model);
-  }
+  @action updateModel(model: UpdateClusterModel) {
+    // Note: do not assign ID as that should never be updated
 
-  /**
-   * Initialize a cluster (can be done only in main process)
-   *
-   * @param port port where internal auth proxy is listening
-   * @internal
-   */
-  @action
-  async init(port: number) {
-    try {
-      this.initializing = true;
-      this.contextHandler = new ContextHandler(this);
-      this.kubeconfigManager = new KubeconfigManager(this, this.contextHandler, port);
-      this.kubeProxyUrl = `http://localhost:${port}${apiKubePrefix}`;
-      this.initialized = true;
-      logger.info(`[CLUSTER]: "${this.contextName}" init success`, {
-        id: this.id,
-        context: this.contextName,
-        apiUrl: this.apiUrl
-      });
-    } catch (err) {
-      logger.error(`[CLUSTER]: init failed: ${err}`, {
-        id: this.id,
-        error: err,
-      });
-    } finally {
-      this.initializing = false;
+    this.kubeConfigPath = model.kubeConfigPath;
+
+    if (model.workspace) {
+      this.workspace = model.workspace;
+    }
+
+    if (model.workspaces) {
+      this.workspaces = model.workspaces;
+    }
+
+    if (model.contextName) {
+      this.contextName = model.contextName;
+    }
+
+    if (model.preferences) {
+      this.preferences = model.preferences;
+    }
+
+    if (model.metadata) {
+      this.metadata = model.metadata;
+    }
+
+    if (model.accessibleNamespaces) {
+      this.accessibleNamespaces = model.accessibleNamespaces;
+    }
+
+    if (model.labels) {
+      this.labels = model.labels;
     }
   }
 
@@ -350,8 +365,8 @@ export class Cluster implements ClusterModel, ClusterState {
     if (this.activated && !force) {
       return this.pushState();
     }
+
     logger.info(`[CLUSTER]: activate`, this.getMeta());
-    await this.whenInitialized;
 
     if (!this.eventDisposers.length) {
       this.bindEvents();
@@ -364,20 +379,22 @@ export class Cluster implements ClusterModel, ClusterState {
 
     if (this.accessible) {
       await this.refreshAccessibility();
-      this.ensureKubectl();
+      this.ensureKubectl(); // download kubectl in background, so it's not blocking dashboard
     }
     this.activated = true;
 
-    return this.pushState();
+    this.pushState();
   }
 
   /**
    * @internal
    */
-  protected async ensureKubectl() {
-    this.kubeCtl = new Kubectl(this.version);
+  async ensureKubectl() {
+    this.kubeCtl ??= new Kubectl(this.version);
 
-    return this.kubeCtl.ensureKubectl(); // download kubectl in background, so it's not blocking dashboard
+    await this.kubeCtl.ensureKubectl();
+
+    return this.kubeCtl;
   }
 
   /**
@@ -415,7 +432,6 @@ export class Cluster implements ClusterModel, ClusterState {
   @action
   async refresh(opts: ClusterRefreshOptions = {}) {
     logger.info(`[CLUSTER]: refresh`, this.getMeta());
-    await this.whenInitialized;
     await this.refreshConnectionStatus();
 
     if (this.accessible) {
@@ -472,17 +488,20 @@ export class Cluster implements ClusterModel, ClusterState {
     this.allowedResources = await this.getAllowedResources();
   }
 
-  protected getKubeconfig(): KubeConfig {
-    return loadConfig(this.kubeConfigPath);
+  async getKubeconfig(): Promise<KubeConfig> {
+    const { config } = await loadConfigFromFile(this.kubeConfigPath);
+
+    return config;
   }
 
   /**
    * @internal
    */
   async getProxyKubeconfig(): Promise<KubeConfig> {
-    const kubeconfigPath = await this.getProxyKubeconfigPath();
+    const proxyKCPath = await this.getProxyKubeconfigPath();
+    const { config } = await loadConfigFromFile(proxyKCPath);
 
-    return loadConfig(kubeconfigPath);
+    return config;
   }
 
   /**
@@ -490,34 +509,6 @@ export class Cluster implements ClusterModel, ClusterState {
    */
   async getProxyKubeconfigPath(): Promise<string> {
     return this.kubeconfigManager.getPath();
-  }
-
-  protected async k8sRequest<T = any>(path: string, options: RequestPromiseOptions = {}): Promise<T> {
-    options.headers ??= {};
-    options.json ??= true;
-    options.timeout ??= 30000;
-    options.headers.Host = `${this.id}.${new URL(this.kubeProxyUrl).host}`; // required in ClusterManager.getClusterForRequest()
-
-    return request(this.kubeProxyUrl + path, options);
-  }
-
-  /**
-   *
-   * @param prometheusPath path to prometheus service
-   * @param queryParams query parameters
-   * @internal
-   */
-  getMetrics(prometheusPath: string, queryParams: IMetricsReqParams & { query: string }) {
-    const prometheusPrefix = this.preferences.prometheus?.prefix || "";
-    const metricsPath = `/api/v1/namespaces/${prometheusPath}/proxy${prometheusPrefix}/api/v1/query_range`;
-
-    return this.k8sRequest(metricsPath, {
-      timeout: 0,
-      resolveWithFullResponse: false,
-      json: true,
-      method: "POST",
-      form: queryParams,
-    });
   }
 
   protected async getConnectionStatus(): Promise<ClusterStatus> {
@@ -610,15 +601,14 @@ export class Cluster implements ClusterModel, ClusterState {
       contextName: this.contextName,
       kubeConfigPath: this.kubeConfigPath,
       workspace: this.workspace,
+      workspaces: this.workspaces,
       preferences: this.preferences,
       metadata: this.metadata,
-      ownerRef: this.ownerRef,
       accessibleNamespaces: this.accessibleNamespaces,
+      labels: this.labels,
     };
 
-    return toJS(model, {
-      recurseEverything: true
-    });
+    return toJS(model);
   }
 
   /**
@@ -626,8 +616,6 @@ export class Cluster implements ClusterModel, ClusterState {
    */
   getState(): ClusterState {
     const state: ClusterState = {
-      initialized: this.initialized,
-      enabled: this.enabled,
       apiUrl: this.apiUrl,
       online: this.online,
       ready: this.ready,
@@ -640,9 +628,7 @@ export class Cluster implements ClusterModel, ClusterState {
       isGlobalWatchEnabled: this.isGlobalWatchEnabled,
     };
 
-    return toJS(state, {
-      recurseEverything: true
-    });
+    return toJS(state);
   }
 
   /**
@@ -667,7 +653,6 @@ export class Cluster implements ClusterModel, ClusterState {
     return {
       id: this.id,
       name: this.contextName,
-      initialized: this.initialized,
       ready: this.ready,
       online: this.online,
       accessible: this.accessible,
@@ -685,7 +670,7 @@ export class Cluster implements ClusterModel, ClusterState {
     const api = (await this.getProxyKubeconfig()).makeApiClient(CoreV1Api);
 
     try {
-      const { body: { items }} = await api.listNamespace();
+      const { body: { items } } = await api.listNamespace();
       const namespaces = items.map(ns => ns.metadata.name);
 
       this.getAllowedNamespacesErrorCount = 0; // reset on success
@@ -748,12 +733,28 @@ export class Cluster implements ClusterModel, ClusterState {
   }
 
   isAllowedResource(kind: string): boolean {
-    const apiResource = apiResources.find(resource => resource.kind === kind || resource.apiName === kind);
+    if ((kind as KubeResource) in apiResourceRecord) {
+      return this.allowedResources.includes(kind);
+    }
+
+    const apiResource = apiResources.find(resource => resource.kind === kind);
 
     if (apiResource) {
       return this.allowedResources.includes(apiResource.apiName);
     }
 
     return true; // allowed by default for other resources
+  }
+
+  isMetricHidden(resource: ClusterMetricsResourceType): boolean {
+    return Boolean(this.preferences.hiddenMetrics?.includes(resource));
+  }
+
+  get nodeShellImage(): string {
+    return this.preferences.nodeShellImage || initialNodeShellImage;
+  }
+
+  get imagePullSecret(): string {
+    return this.preferences.imagePullSecret || "";
   }
 }

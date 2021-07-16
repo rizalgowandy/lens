@@ -1,12 +1,32 @@
+/**
+ * Copyright (c) 2021 OpenLens Authors
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+ * FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+ * COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+ * IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ */
+
 import "./pods.scss";
 
 import React, { Fragment } from "react";
 import { observer } from "mobx-react";
 import { Link } from "react-router-dom";
 import { podsStore } from "./pods.store";
-import { RouteComponentProps } from "react-router";
+import type { RouteComponentProps } from "react-router";
 import { volumeClaimStore } from "../+storage-volume-claims/volume-claim.store";
-import { IPodsRouteParams } from "../+workloads";
 import { eventStore } from "../+events/event.store";
 import { getDetailsUrl, KubeObjectListLayout } from "../kube-object";
 import { nodesApi, Pod } from "../../api/endpoints";
@@ -18,6 +38,7 @@ import kebabCase from "lodash/kebabCase";
 import { lookupApiLink } from "../../api/kube-api";
 import { KubeObjectStatusIcon } from "../kube-object-status-icon";
 import { Badge } from "../badge";
+import type { PodsRouteParams } from "../../../common/routes";
 
 enum columnId {
   name = "name",
@@ -31,7 +52,7 @@ enum columnId {
   status = "status",
 }
 
-interface Props extends RouteComponentProps<IPodsRouteParams> {
+interface Props extends RouteComponentProps<PodsRouteParams> {
 }
 
 @observer
@@ -106,7 +127,7 @@ export class Pods extends React.Component<Props> {
           { title: "Status", className: "status", sortBy: columnId.status, id: columnId.status },
         ]}
         renderTableContents={(pod: Pod) => [
-          <Badge flat key="name" label={pod.getName()} tooltip={pod.getName()} />,
+          <Badge flat key="name" label={pod.getName()} tooltip={pod.getName()} expandable={false} />,
           <KubeObjectStatusIcon key="icon" object={pod} />,
           pod.getNs(),
           this.renderContainersStatus(pod),
@@ -124,7 +145,7 @@ export class Pods extends React.Component<Props> {
             );
           }),
           pod.getNodeName() ?
-            <Badge flat key="node" className="node" tooltip={pod.getNodeName()}>
+            <Badge flat key="node" className="node" tooltip={pod.getNodeName()} expandable={false}>
               <Link to={getDetailsUrl(nodesApi.getUrl({ name: pod.getNodeName() }))} onClick={stopPropagation}>
                 {pod.getNodeName()}
               </Link>
